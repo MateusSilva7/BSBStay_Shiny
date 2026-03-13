@@ -38,6 +38,9 @@ if (is.na(MAX_CACHE_AGE_H) || MAX_CACHE_AGE_H <= 0) MAX_CACHE_AGE_H <- 6
 }
 .ensure_pkgs(c("readxl", "DBI", "RSQLite", "dplyr", "lubridate", "tidyr", "janitor"))
 
+# -- Utilitários -----------------------------------------------
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
+
 extrair_file_id <- function(x) {
   x <- trimws(x %||% "")
   if (!nzchar(x)) return("")
@@ -56,8 +59,6 @@ if (!nzchar(trimws(DRIVE_FILE_ID %||% "")) && nzchar(trimws(DRIVE_FILE_URL %||% 
   DRIVE_FILE_ID <- extrair_file_id(DRIVE_FILE_URL)
 }
 
-# -- Utilitários -----------------------------------------------
-`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
 
 parse_date_safe <- function(x) {
   if (is.null(x) || all(is.na(x))) return(as.Date(NA))
@@ -678,7 +679,9 @@ carregar_xlsx_local <- function(path_xlsx) {
   file.copy(path_xlsx, CACHE_XLSX, overwrite = TRUE)
   con <- sqlite_connect(); on.exit(DBI::dbDisconnect(con))
   db <- ler_e_processar_db_master(CACHE_XLSX)
-  for (nm in names(db)) if (is.data.frame(db[[nm]])) sqlite_write_table(db[[nm]], nm, con)
+  for (nm in names(db)) {
+    if (is.data.frame(db[[nm]])) sqlite_write_table(db[[nm]], nm, con)
+  }
   sqlite_set_meta(CACHE_META_KEY, format(Sys.time()), con)
   montar_objeto_app_sqlite(con)
 }
