@@ -5,7 +5,7 @@
 # Download base R + SQLite cache. Sem httr2, sem Google Cloud.
 # ============================================================
 
-# -- Ambiente / paths ------------------------------------------
+# ── Ambiente / paths ──────────────────────────────────────────
 APP_ROOT <- get0("APP_ROOT", ifnotfound = normalizePath(Sys.getenv("APP_ROOT", "."), winslash = "/", mustWork = FALSE))
 DATA_DIR <- normalizePath(Sys.getenv("APP_DATA_DIR", file.path(APP_ROOT, "data")), winslash = "/", mustWork = FALSE)
 CACHE_DIR <- normalizePath(Sys.getenv("APP_CACHE_DIR", file.path(DATA_DIR, "cache")), winslash = "/", mustWork = FALSE)
@@ -13,9 +13,8 @@ RAW_DIR <- normalizePath(Sys.getenv("APP_RAW_DIR", file.path(DATA_DIR, "raw")), 
 dir.create(CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
 dir.create(RAW_DIR, recursive = TRUE, showWarnings = FALSE)
 
-# -- Constantes ------------------------------------------------
+# ── Constantes ────────────────────────────────────────────────
 DRIVE_FOLDER_ID <- Sys.getenv("DRIVE_FOLDER_ID", unset = "1753AZxwmyyWYS2oYQPLeMHIz5gM8bscb")
-DRIVE_FILE_URL  <- Sys.getenv("DRIVE_FILE_URL", unset = "")
 DRIVE_FILE_ID   <- Sys.getenv("DRIVE_FILE_ID", unset = "1fnereY6JOrAbSl1yw_o_U94Fb0KTuHGJU85GEUrCBiU")
 
 CACHE_XLSX      <- file.path(CACHE_DIR, "db_master_drive.xlsx")
@@ -24,7 +23,7 @@ CACHE_META_KEY  <- "last_drive_sync"
 MAX_CACHE_AGE_H <- suppressWarnings(as.numeric(Sys.getenv("MAX_CACHE_AGE_H", "6")))
 if (is.na(MAX_CACHE_AGE_H) || MAX_CACHE_AGE_H <= 0) MAX_CACHE_AGE_H <- 6
 
-# -- Pacotes ---------------------------------------------------
+# ── Pacotes ───────────────────────────────────────────────────
 .ensure_pkgs <- function(pkgs) {
   miss <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
   if (length(miss)) {
@@ -38,27 +37,8 @@ if (is.na(MAX_CACHE_AGE_H) || MAX_CACHE_AGE_H <= 0) MAX_CACHE_AGE_H <- 6
 }
 .ensure_pkgs(c("readxl", "DBI", "RSQLite", "dplyr", "lubridate", "tidyr", "janitor"))
 
-# -- Utilitários -----------------------------------------------
+# ── Utilitários ───────────────────────────────────────────────
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
-
-extrair_file_id <- function(x) {
-  x <- trimws(x %||% "")
-  if (!nzchar(x)) return("")
-  if (!grepl("https?://", x, ignore.case = TRUE)) return(x)
-  pats <- c("/spreadsheets/d/([a-zA-Z0-9_-]+)",
-            "[?&]id=([a-zA-Z0-9_-]+)")
-  for (pt in pats) {
-    m <- regexec(pt, x, perl = TRUE)
-    r <- regmatches(x, m)[[1]]
-    if (length(r) >= 2 && nzchar(r[2])) return(r[2])
-  }
-  ""
-}
-
-if (!nzchar(trimws(DRIVE_FILE_ID %||% "")) && nzchar(trimws(DRIVE_FILE_URL %||% ""))) {
-  DRIVE_FILE_ID <- extrair_file_id(DRIVE_FILE_URL)
-}
-
 
 parse_date_safe <- function(x) {
   if (is.null(x) || all(is.na(x))) return(as.Date(NA))
@@ -80,7 +60,7 @@ parse_date_safe <- function(x) {
 
 normalizar_cpf_cnpj <- function(x) trimws(as.character(x))
 
-# -- URLs de download ------------------------------------------
+# ── URLs de download ──────────────────────────────────────────
 urls_para_file_id <- function(file_id) {
   c(
     paste0("https://docs.google.com/spreadsheets/d/", file_id, "/export?format=xlsx"),
@@ -91,39 +71,32 @@ urls_para_file_id <- function(file_id) {
   )
 }
 
-# -- Download binário com retry e validação por readxl ---------
+# ── Download binário base R com retry ─────────────────────────
 baixar_url_base <- function(urls, destino, timeout_s = 120) {
   metodos <- unique(c("libcurl", "auto", "curl", if (.Platform$OS.type == "windows") "wininet"))
-  tentativas <- character(0)
-  validar_xlsx <- function(path) {
-    ok <- tryCatch({
-      sh <- readxl::excel_sheets(path)
-      length(sh) > 0
-    }, error = function(e) FALSE)
-    isTRUE(ok)
-  }
   for (url in urls) {
     for (met in metodos) {
-      tentativas <- c(tentativas, sprintf("%s [%s]", url, met))
       ok <- tryCatch({
         tmp <- tempfile(fileext = ".xlsx")
         old_to <- getOption("timeout"); options(timeout = timeout_s)
         on.exit(options(timeout = old_to), add = TRUE)
         st <- utils::download.file(url, tmp, mode = "wb", quiet = TRUE, method = met)
-        if (!identical(st, 0L) || !file.exists(tmp) || file.info(tmp)$size <= 0) { unlink(tmp); return(FALSE) }
+        if (st != 0) { unlink(tmp); return(NULL) }
+        sig <- readBin(tmp, raw(), n = 4)
+        is_zip  <- identical(sig, as.raw(c(0x50, 0x4B, 0x03, 0x04)))
+        is_ole2 <- identical(sig, as.raw(c(0xD0, 0xCF, 0x11, 0xE0)))
+        if (!is_zip && !is_ole2) { unlink(tmp); return(NULL) }
         dir.create(dirname(destino), recursive = TRUE, showWarnings = FALSE)
-        file.copy(tmp, destino, overwrite = TRUE)
-        unlink(tmp)
-        if (!validar_xlsx(destino)) { unlink(destino); return(FALSE) }
+        file.copy(tmp, destino, overwrite = TRUE); unlink(tmp)
         TRUE
-      }, error = function(e) FALSE)
-      if (isTRUE(ok)) return(list(ok = TRUE, tentativas = tentativas))
+      }, error = function(e) NULL)
+      if (isTRUE(ok)) return(TRUE)
     }
   }
-  list(ok = FALSE, tentativas = tentativas)
+  FALSE
 }
 
-# -- Download principal -----------------------------------------
+# ── Download principal ─────────────────────────────────────────
 baixar_db_master_publico <- function(file_id = DRIVE_FILE_ID, destino = CACHE_XLSX,
                                      forcar = FALSE, timeout_s = 120) {
   dir.create(dirname(destino), recursive = TRUE, showWarnings = FALSE)
@@ -131,36 +104,23 @@ baixar_db_master_publico <- function(file_id = DRIVE_FILE_ID, destino = CACHE_XL
     idade_h <- as.numeric(difftime(Sys.time(), file.mtime(destino), units = "hours"))
     if (idade_h < MAX_CACHE_AGE_H) return(list(ok = TRUE, path = destino, source = "cache"))
   }
-  fid <- extrair_file_id(file_id %||% DRIVE_FILE_URL)
+  fid <- trimws(file_id %||% "")
   if (!nzchar(fid)) {
-    candidatos <- if (dir.exists(RAW_DIR)) list.files(RAW_DIR, pattern = "\.(xlsx|xls)$", full.names = TRUE) else character(0)
-    if (length(candidatos) > 0) {
-      file.copy(candidatos[1], destino, overwrite = TRUE)
-      return(list(ok = TRUE, path = destino, source = "local_raw"))
-    }
-    return(list(ok = FALSE, path = NULL, source = "erro", msg = "DRIVE_FILE_ID/DRIVE_FILE_URL nao configurado e nenhum xlsx encontrado em data/raw/"))
+    raw_dir    <- RAW_DIR
+    candidatos <- if (dir.exists(raw_dir)) list.files(raw_dir, pattern = "\\.(xlsx|xls)$", full.names = TRUE) else character(0)
+    if (length(candidatos) > 0) { file.copy(candidatos[1], destino, overwrite = TRUE); return(list(ok = TRUE, path = destino, source = "local_raw")) }
+    return(list(ok = FALSE, path = NULL, source = "erro", msg = "DRIVE_FILE_ID nao configurado"))
   }
-  dl <- baixar_url_base(urls_para_file_id(fid), destino, timeout_s)
-  if (isTRUE(dl$ok)) return(list(ok = TRUE, path = destino, source = "drive"))
-  candidatos <- if (dir.exists(RAW_DIR)) list.files(RAW_DIR, pattern = "\.(xlsx|xls)$", full.names = TRUE) else character(0)
-  if (length(candidatos) > 0) {
-    file.copy(candidatos[1], destino, overwrite = TRUE)
-    return(list(ok = TRUE, path = destino, source = "local_raw"))
-  }
+  ok <- baixar_url_base(urls_para_file_id(fid), destino, timeout_s)
+  if (ok) return(list(ok = TRUE, path = destino, source = "drive"))
+  raw_dir    <- RAW_DIR
+  candidatos <- if (dir.exists(raw_dir)) list.files(raw_dir, pattern = "\\.(xlsx|xls)$", full.names = TRUE) else character(0)
+  if (length(candidatos) > 0) { file.copy(candidatos[1], destino, overwrite = TRUE); return(list(ok = TRUE, path = destino, source = "local_raw")) }
   if (file.exists(destino)) return(list(ok = TRUE, path = destino, source = "cache_old"))
-  list(
-    ok = FALSE,
-    path = NULL,
-    source = "erro",
-    msg = paste0(
-      "Nao foi possivel baixar/validar o xlsx do Google Drive. ",
-      "Verifique se a planilha esta acessivel pelo link publico de exportacao ou defina DRIVE_FILE_URL. ",
-      "Tentativas: ", paste(unique(dl$tentativas), collapse = " | ")
-    )
-  )
+  list(ok = FALSE, path = NULL, source = "erro", msg = "Nao foi possivel baixar. Coloque o xlsx em data/raw/")
 }
 
-# -- SQLite helpers ---------------------------------------------
+# ── SQLite helpers ─────────────────────────────────────────────
 sqlite_connect     <- function(path = SQLITE_PATH) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   DBI::dbConnect(RSQLite::SQLite(), path)
@@ -192,7 +152,7 @@ sqlite_tables_exist <- function(tables, con = NULL) {
   all(vapply(tables, DBI::dbExistsTable, logical(1), conn = con))
 }
 
-# -- Leitura e normalização do xlsx ----------------------------
+# ── Leitura e normalização do xlsx ────────────────────────────
 #
 # ESTRUTURA REAL confirmada do [DB] BSBStay_VF.xlsx:
 #
@@ -225,7 +185,7 @@ ler_e_processar_db_master <- function(path_xlsx) {
     janitor::clean_names(df)
   }), obrig)
   
-  # -- dim_proprietario --
+  # ── dim_proprietario ──
   out$dim_proprietario <- out$dim_proprietario |>
     dplyr::mutate(
       owner_id          = format(as.numeric(owner_id), scientific = FALSE, trim = TRUE),
@@ -234,7 +194,7 @@ ler_e_processar_db_master <- function(path_xlsx) {
     ) |>
     dplyr::filter(!is.na(owner_id), !is.na(cpf_cnpj), nzchar(cpf_cnpj))
   
-  # -- dim_imovel --
+  # ── dim_imovel ──
   out$dim_imovel <- out$dim_imovel |>
     dplyr::mutate(
       property_id    = as.character(property_id),
@@ -245,10 +205,10 @@ ler_e_processar_db_master <- function(path_xlsx) {
     ) |>
     dplyr::filter(!is.na(property_id), nzchar(property_id))
   
-  # -- agg_prestacao_contas --
+  # ── agg_prestacao_contas ──
   out$agg_prestacao_contas <- out$agg_prestacao_contas |>
     dplyr::mutate(
-      competencia       = format(parse_date_safe(competencia), "%Y-%m"),
+      competencia       = format(as.Date(competencia), "%Y-%m"),
       cpf_cnpj          = normalizar_cpf_cnpj(cpf_cnpj),
       nome_proprietario = as.character(nome_proprietario),
       owner_id          = format(as.numeric(owner_id), scientific = FALSE, trim = TRUE),
@@ -264,13 +224,13 @@ ler_e_processar_db_master <- function(path_xlsx) {
     ) |>
     dplyr::filter(!is.na(cpf_cnpj), nzchar(cpf_cnpj), !is.na(competencia))
   
-  # -- fact_reservas --
+  # ── fact_reservas ──
   out$fact_reservas <- out$fact_reservas |>
     dplyr::mutate(
-      competencia         = format(parse_date_safe(competencia), "%Y-%m"),
+      competencia         = format(as.Date(competencia), "%Y-%m"),
       property_id         = as.character(property_id),
-      checkin             = as.character(parse_date_safe(checkin)),
-      checkout            = as.character(parse_date_safe(checkout)),
+      checkin             = as.character(as.Date(checkin)),
+      checkout            = as.character(as.Date(checkout)),
       noites_total        = suppressWarnings(as.numeric(noites_total)),
       noites_no_mes       = suppressWarnings(as.numeric(noites_no_mes)),
       diaria_liquida      = suppressWarnings(as.numeric(diaria_liquida)),
@@ -278,60 +238,49 @@ ler_e_processar_db_master <- function(path_xlsx) {
     ) |>
     dplyr::filter(!is.na(property_id), !is.na(checkin), !is.na(checkout))
   
-  # -- fact_manutencao --
-  manut_data_src <- if ("data" %in% names(out$fact_manutencao)) {
-    out$fact_manutencao[["data"]]
-  } else {
-    out$fact_manutencao[["competencia"]]
-  }
-
+  # ── fact_manutencao ──
   out$fact_manutencao <- out$fact_manutencao |>
     dplyr::mutate(
-      competencia     = format(parse_date_safe(competencia), "%Y-%m"),
+      competencia     = format(as.Date(competencia), "%Y-%m"),
       property_id     = as.character(property_id),
       valor_total     = suppressWarnings(as.numeric(valor_total)),
-      data            = as.character(parse_date_safe(manut_data_src)),
+      data            = as.character(parse_date_safe(
+        if ("data" %in% names(out$fact_manutencao)) data else competencia)),
       os_id           = if ("os_id"          %in% names(out$fact_manutencao)) as.character(os_id) else NA_character_,
       produto_servico = if ("produto_servico" %in% names(out$fact_manutencao)) as.character(produto_servico) else NA_character_
     )
   
-  # -- fact_reposicao --
+  # ── fact_reposicao ──
   out$fact_reposicao <- out$fact_reposicao |>
     dplyr::mutate(
-      competencia             = format(parse_date_safe(competencia), "%Y-%m"),
+      competencia             = format(as.Date(competencia), "%Y-%m"),
       property_id             = as.character(property_id),
       quantidade              = suppressWarnings(as.numeric(quantidade)),
       valor_unitario_ou_total = suppressWarnings(as.numeric(valor_unitario_ou_total))
     )
   
-  # -- fact_repasse --
+  # ── fact_repasse ──
   out$fact_repasse <- out$fact_repasse |>
     dplyr::mutate(
-      competencia = format(parse_date_safe(competencia), "%Y-%m"),
+      competencia = format(as.Date(competencia), "%Y-%m"),
       property_id = as.character(property_id),
       valor       = suppressWarnings(as.numeric(valor)),
       comissao    = suppressWarnings(as.numeric(comissao))
     )
   
-  # -- fact_despesas --
-  desp_data_src <- if ("data" %in% names(out$fact_despesas)) {
-    out$fact_despesas[["data"]]
-  } else {
-    out$fact_despesas[["competencia"]]
-  }
-
+  # ── fact_despesas ──
   out$fact_despesas <- out$fact_despesas |>
     dplyr::mutate(
-      competencia = format(parse_date_safe(competencia), "%Y-%m"),
+      competencia = format(as.Date(competencia), "%Y-%m"),
       property_id = as.character(property_id),
       valor       = suppressWarnings(as.numeric(valor)),
-      data        = as.character(parse_date_safe(desp_data_src))
+      data        = as.character(parse_date_safe(data))
     )
   
   out
 }
 
-# -- Pipeline principal -----------------------------------------
+# ── Pipeline principal ─────────────────────────────────────────
 carregar_dados_app <- function(
     file_id    = DRIVE_FILE_ID,
     folder_id  = DRIVE_FOLDER_ID,
@@ -353,12 +302,8 @@ carregar_dados_app <- function(
   dl <- baixar_db_master_publico(file_id = file_id, forcar = forcar_dl)
   if (!dl$ok) stop(dl$msg)
   
-  message(sprintf("[Download] Fonte de dados: %s | arquivo: %s", dl$source, dl$path))
   message("[ETL] Processando planilha...")
-  db <- tryCatch(
-    ler_e_processar_db_master(dl$path),
-    error = function(e) stop("Falha ao processar a planilha baixada: ", e$message)
-  )
+  db <- ler_e_processar_db_master(dl$path)
   for (nm in names(db)) if (is.data.frame(db[[nm]])) sqlite_write_table(db[[nm]], nm, con)
   sqlite_set_meta(CACHE_META_KEY, format(Sys.time()), con)
   
@@ -366,7 +311,7 @@ carregar_dados_app <- function(
   montar_objeto_app_sqlite(con)
 }
 
-# -- Monta objeto app a partir do SQLite -----------------------
+# ── Monta objeto app a partir do SQLite ───────────────────────
 #
 # FLUXO DE DADOS (v3):
 #   agg_prestacao_contas  → owners + receitas (métricas mensais)
@@ -390,7 +335,7 @@ montar_objeto_app_sqlite <- function(con) {
   if (is.null(agg) || nrow(agg) == 0)
     stop("Tabela agg_prestacao_contas vazia. Apague o SQLite e reinicie.")
   
-  # -- 1. Normaliza agg ------------------------------------------
+  # ── 1. Normaliza agg ──────────────────────────────────────────
   agg <- tryCatch({
     agg |>
       dplyr::mutate(
@@ -413,7 +358,7 @@ montar_objeto_app_sqlite <- function(con) {
       dplyr::filter(!is.na(cpf_cnpj), nzchar(cpf_cnpj), !is.na(mes))
   }, error = function(e) stop("Erro ao normalizar agg: ", e$message))
   
-  # -- 2. Portfolio ----------------------------------------------
+  # ── 2. Portfolio ──────────────────────────────────────────────
   portfolio <- tryCatch({
     if (!is.null(dim_imovel) && nrow(dim_imovel) > 0 &&
         !is.null(dim_prop)   && nrow(dim_prop)   > 0) {
@@ -437,7 +382,7 @@ montar_objeto_app_sqlite <- function(con) {
     } else data.frame()
   }, error = function(e) { message("AVISO portfolio: ", e$message); data.frame() })
   
-  # -- Mapa property_id → cpf_cnpj (usado pelos fatos) ----------
+  # ── Mapa property_id → cpf_cnpj (usado pelos fatos) ──────────
   pid_map <- if (nrow(portfolio) > 0)
     portfolio |>
     dplyr::select(property_id, cpf_cnpj, imovel_nome = nome) |>
@@ -445,7 +390,7 @@ montar_objeto_app_sqlite <- function(con) {
   else
     data.frame(property_id = character(), cpf_cnpj = character(), imovel_nome = character())
   
-  # -- 3. Calendario (expansão diária das reservas) --------------
+  # ── 3. Calendario (expansão diária das reservas) ──────────────
   calendario <- tryCatch({
     if (!is.null(reservas) && nrow(reservas) > 0 &&
         all(c("checkin", "checkout", "property_id") %in% names(reservas))) {
@@ -480,7 +425,7 @@ montar_objeto_app_sqlite <- function(con) {
     } else data.frame()
   }, error = function(e) { message("AVISO calendario: ", e$message); data.frame() })
   
-  # -- 4. Reservas nível reserva (para análise de diária entre check-ins) --
+  # ── 4. Reservas nível reserva (para análise de diária entre check-ins) ──
   # Cada linha = 1 reserva; usado para calcular intervalos entre check-ins
   reservas_clean <- tryCatch({
     if (!is.null(reservas) && nrow(reservas) > 0) {
@@ -498,7 +443,7 @@ montar_objeto_app_sqlite <- function(con) {
     } else data.frame()
   }, error = function(e) { message("AVISO reservas_clean: ", e$message); data.frame() })
   
-  # -- 5. Manutenção / Ordens de serviço -------------------------
+  # ── 5. Manutenção / Ordens de serviço ─────────────────────────
   # JOIN: fact_manutencao.property_id → pid_map.property_id → cpf_cnpj
   manutencao_clean <- tryCatch({
     if (!is.null(manutencao) && nrow(manutencao) > 0) {
@@ -516,7 +461,7 @@ montar_objeto_app_sqlite <- function(con) {
     } else data.frame()
   }, error = function(e) { message("AVISO manutencao: ", e$message); data.frame() })
   
-  # -- 6. Reposição ----------------------------------------------
+  # ── 6. Reposição ──────────────────────────────────────────────
   reposicao_clean <- tryCatch({
     if (!is.null(reposicao) && nrow(reposicao) > 0) {
       reposicao |>
@@ -531,7 +476,7 @@ montar_objeto_app_sqlite <- function(con) {
     } else data.frame()
   }, error = function(e) { message("AVISO reposicao: ", e$message); data.frame() })
   
-  # -- 7. Despesas operacionais ----------------------------------
+  # ── 7. Despesas operacionais ──────────────────────────────────
   # Inferência de categoria: se a coluna "categoria" não existe na base,
   # tentamos derivá-la de "tipo", "descricao" ou similar; caso contrário, "Outras"
   despesas_clean <- tryCatch({
@@ -558,7 +503,7 @@ montar_objeto_app_sqlite <- function(con) {
     } else data.frame()
   }, error = function(e) { message("AVISO despesas: ", e$message); data.frame() })
   
-  # -- 8. Owners -------------------------------------------------
+  # ── 8. Owners ─────────────────────────────────────────────────
   owners <- agg |>
     dplyr::distinct(cpf_cnpj, nome_proprietario) |>
     dplyr::filter(!is.na(cpf_cnpj), nzchar(cpf_cnpj))
@@ -577,7 +522,7 @@ montar_objeto_app_sqlite <- function(con) {
       )
     )
   
-  # -- 9. Lista final por cpf_cnpj -------------------------------
+  # ── 9. Lista final por cpf_cnpj ───────────────────────────────
   obj <- lapply(owners$cpf_cnpj, function(cpf) {
     orow <- owners |> dplyr::filter(cpf_cnpj == cpf) |> dplyr::slice(1)
     port <- if (nrow(portfolio) > 0) portfolio |> dplyr::filter(cpf_cnpj == cpf) else data.frame()
@@ -613,75 +558,52 @@ montar_objeto_app_sqlite <- function(con) {
   stats::setNames(obj, owners$cpf_cnpj)
 }
 
-# Status ---------------------------------------------------------
+# ── Status ─────────────────────────────────────────────────────
 status_cache <- function() {
-  con <- sqlite_connect()
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-
-  last <- sqlite_get_meta(CACHE_META_KEY, con)
+  con <- sqlite_connect(); on.exit(DBI::dbDisconnect(con))
+  last    <- sqlite_get_meta(CACHE_META_KEY, con)
   tabelas <- tryCatch(DBI::dbListTables(con), error = function(e) character(0))
-
-  cache_age_h <- NA_real_
-  if (!is.null(last) && length(last) > 0 && !all(is.na(last))) {
-    cache_age_h <- tryCatch(
-      round(as.numeric(difftime(Sys.time(), as.POSIXct(last), units = "hours")), 1),
-      error = function(e) NA_real_
-    )
-  }
-
   list(
-    last_sync = last,
-    cache_age_h = cache_age_h,
-    xlsx_cache = file.exists(CACHE_XLSX),
+    last_sync   = last,
+    cache_age_h = if (!is.na(last))
+      round(as.numeric(difftime(Sys.time(), as.POSIXct(last), units = "hours")), 1) else NA,
+    xlsx_cache  = file.exists(CACHE_XLSX),
     sqlite_path = SQLITE_PATH,
-    tabelas = tabelas
+    tabelas     = tabelas
   )
 }
 
-# Diagnostico ----------------------------------------------------
+# ── Diagnostico ────────────────────────────────────────────────
 diagnostico_drive <- function(file_id = DRIVE_FILE_ID) {
   cat("\n=============================================\n")
-  cat("  BSBStay - Diagnostico v4\n")
+  cat("  BSBStay - Diagnostico v3\n")
   cat("=============================================\n\n")
   cat("1. Rede... ")
-
   ok_net <- tryCatch({
-    tmp <- tempfile(fileext = ".html")
-    on.exit(unlink(tmp), add = TRUE)
-    old_to <- getOption("timeout")
-    options(timeout = 10)
+    tmp <- tempfile(); on.exit(unlink(tmp))
+    old_to <- getOption("timeout"); options(timeout = 10)
     on.exit(options(timeout = old_to), add = TRUE)
-    utils::download.file("https://www.google.com", tmp, quiet = TRUE, method = "libcurl")
-    TRUE
+    utils::download.file("https://www.google.com", tmp, quiet = TRUE, method = "libcurl") == 0
   }, error = function(e) FALSE)
-
-  cat(if (isTRUE(ok_net)) "OK\n" else "SEM REDE\n")
-
+  cat(if (ok_net) "OK\n" else "SEM REDE\n")
   fid <- trimws(file_id %||% "")
-  fid_msg <- if (nzchar(fid)) paste("OK:", fid) else "NAO CONFIGURADO"
-  cat(sprintf("2. DRIVE_FILE_ID... %s\n", fid_msg))
-
+  cat(sprintf("2. DRIVE_FILE_ID... %s\n", if (nzchar(fid)) paste("OK:", fid) else "NAO CONFIGURADO"))
   st <- tryCatch(status_cache(), error = function(e) NULL)
-  sqlite_msg <- "Vazio"
-  if (!is.null(st) && length(st$tabelas) > 0) {
-    sqlite_msg <- sprintf("%d tabelas, sync: %s", length(st$tabelas), st$last_sync %||% "nunca")
-  }
-  cat(sprintf("3. SQLite... %s\n", sqlite_msg))
-
+  cat(sprintf("3. SQLite... %s\n",
+              if (!is.null(st) && length(st$tabelas) > 0)
+                sprintf("%d tabelas, sync: %s", length(st$tabelas), st$last_sync %||% "nunca")
+              else "Vazio"))
   invisible(NULL)
 }
 
-# Fallback manual ------------------------------------------------
+# ── Fallback manual ────────────────────────────────────────────
 carregar_xlsx_local <- function(path_xlsx) {
-
   if (!file.exists(path_xlsx)) stop("Arquivo nao encontrado: ", path_xlsx)
   dir.create(dirname(CACHE_XLSX), recursive = TRUE, showWarnings = FALSE)
   file.copy(path_xlsx, CACHE_XLSX, overwrite = TRUE)
   con <- sqlite_connect(); on.exit(DBI::dbDisconnect(con))
   db <- ler_e_processar_db_master(CACHE_XLSX)
-  for (nm in names(db)) {
-    if (is.data.frame(db[[nm]])) sqlite_write_table(db[[nm]], nm, con)
-  }
+  for (nm in names(db)) if (is.data.frame(db[[nm]])) sqlite_write_table(db[[nm]], nm, con)
   sqlite_set_meta(CACHE_META_KEY, format(Sys.time()), con)
   montar_objeto_app_sqlite(con)
 }
