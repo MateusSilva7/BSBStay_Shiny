@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+renv/library
+renv/staging
+data/cache/*.sqlite
+data/cache/*.xlsx
+*.zip
+*.tar.gz

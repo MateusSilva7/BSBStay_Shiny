@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: bsbstay-shiny
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: APP_MODE
+        value: public
+      - key: MAX_CACHE_AGE_H
+        value: "6"
+      - key: DRIVE_FILE_ID
+        value: 1fnereY6JOrAbSl1yw_o_U94Fb0KTuHGJU85GEUrCBiU
+      - key: DRIVE_FOLDER_ID
+        value: 1753AZxwmyyWYS2oYQPLeMHIz5gM8bscb
