@@ -297,7 +297,7 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
       div(class = "cnpj-bar-inner",
           div(class = "cnpj-bar-title", "🔍 Acesso ao Painel"),
           div(class = "cnpj-bar-sub",
-              "Informe o CNPJ cadastrado para visualizar os dados do seu portfólio"),
+              "Informe o CNPJ/CPF cadastrado para visualizar os dados do seu portfólio"),
           div(class = "cnpj-input-wrap",
               textInput("cnpj_input", label = NULL,
                         placeholder = "Ex.: 12.345.678/0001-90", width = "100%"),
@@ -306,7 +306,7 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
                           "Acessar")
           ),
           uiOutput("cnpj_status"),
-          div(class = "cnpj-hint", "🔒 Dados exibidos exclusivamente para o CNPJ informado")
+          div(class = "cnpj-hint", "🔒 Dados exibidos exclusivamente para o CNPJ/CPF informado")
       )
   ),
   
