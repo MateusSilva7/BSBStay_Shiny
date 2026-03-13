@@ -71,9 +71,17 @@ frow <- function(lbl, val, neg = FALSE) {
 }
 
 # ── Carregamento inicial ────────────────────────────────────────
+# ── Carregamento inicial ────────────────────────────────────────
 APP_DATA <- tryCatch(
-  carregar_dados_app(folder_id = DRIVE_FOLDER_ID, forcar_dl = FALSE, forcar_etl = FALSE),
-  error = function(e) { structure(list(), erro_msg = e$message) }
+  carregar_dados_app(
+    file_id = DRIVE_FILE_ID,
+    folder_id = DRIVE_FOLDER_ID,
+    forcar_dl = TRUE,
+    forcar_etl = TRUE
+  ),
+  error = function(e) {
+    structure(list(), erro_msg = e$message)
+  }
 )
 
 # ═══════════════════════════════════════════════════════════════
