@@ -1,22 +1,13 @@
 # ============================================================
-# BSB.STAY — Painel Mestre (Versão Interna) v2.0
+# BSB.STAY — Painel Mestre (Versão Interna) v2.1-render
 # app_master.R
 #
-# - Sem busca por CNPJ — acesso direto
-# - Navegação por Proprietário + Imóvel
-# - Visão consolidada da carteira
-# - Insights e proposta de valor
+# ATENÇÃO: options(shiny.host/port) e source(gdrive_public.R)
+# são feitos EXCLUSIVAMENTE em run.R.
 # ============================================================
 
-# ── Bootstrap Render/Docker ───────────────────────────────────
-options(
-  shiny.host = "0.0.0.0",
-  shiny.port = as.integer(Sys.getenv("PORT", "3838"))
-)
-
 APP_ROOT <- normalizePath(Sys.getenv("APP_ROOT", "."), winslash = "/", mustWork = FALSE)
-dir.create(file.path(APP_ROOT, "data", "cache"), recursive = TRUE, showWarnings = FALSE)
-dir.create(file.path(APP_ROOT, "data", "raw"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(Sys.getenv("APP_CACHE_DIR", "/tmp/bsbstay_cache")), recursive = TRUE, showWarnings = FALSE)
 
 suppressPackageStartupMessages({
   library(shiny)
@@ -33,7 +24,10 @@ suppressPackageStartupMessages({
   library(stringr)
 })
 
-source(file.path(APP_ROOT, "R", "gdrive_public.R"), local = FALSE)
+# Só faz source se não foi carregado por run.R (standalone / dev local)
+if (!exists("carregar_dados_app", inherits = TRUE)) {
+  source(file.path(APP_ROOT, "R", "gdrive_public.R"), local = FALSE)
+}
 
 # ── Helpers ────────────────────────────────────────────────────
 `%||%` <- function(x, y) {
@@ -115,20 +109,24 @@ insight_card <- function(ico, titulo, corpo, cor = "blue") {
           div(class = "insight-text", corpo)))
 }
 
-# ── Carregamento inicial ────────────────────────────────────────
-# ── Carregamento inicial ────────────────────────────────────────
-APP_DATA <- tryCatch(
-  carregar_dados_app(
-    file_id = DRIVE_FILE_ID,
-    folder_id = DRIVE_FOLDER_ID,
-    forcar_dl = TRUE,
-    forcar_etl = TRUE
-  ),
-  error = function(e) {
-    message("[Master] Erro: ", e$message)
-    structure(list(), erro_msg = e$message)
-  }
-)
+# ── Carregamento inicial ──────────────────────────────────────
+# APP_DATA_GLOBAL foi pré-aquecido por run.R (boot-time, forcar_dl=FALSE).
+# Se não existir (standalone/dev), carrega agora.
+if (!exists("APP_DATA_GLOBAL", inherits = TRUE)) {
+  APP_DATA_GLOBAL <<- tryCatch(
+    carregar_dados_app(
+      file_id    = DRIVE_FILE_ID,
+      folder_id  = DRIVE_FOLDER_ID,
+      forcar_dl  = FALSE,
+      forcar_etl = FALSE
+    ),
+    error = function(e) {
+      message("[Master] Erro no carregamento: ", e$message)
+      structure(list(), erro_msg = e$message)
+    }
+  )
+}
+APP_DATA <- APP_DATA_GLOBAL
 # Extrai dados flat de todos os proprietários (para aba Carteira)
 build_carteira_flat <- function(app_data) {
   if (length(app_data) == 0) return(data.frame())
@@ -408,8 +406,16 @@ server <- function(input, output, session) {
   observeEvent(input$btn_sync, {
     rv$syncing <- TRUE
     tryCatch({
-      nd <- carregar_dados_app(folder_id = DRIVE_FOLDER_ID, forcar_dl = TRUE, forcar_etl = TRUE)
-      rv$app_data <- nd; rv$last_sync <- format(Sys.time(), "%d/%m/%Y %H:%M"); rv$sync_status <- "ok"
+      nd <- carregar_dados_app(
+        file_id    = DRIVE_FILE_ID,
+        folder_id  = DRIVE_FOLDER_ID,
+        forcar_dl  = TRUE,
+        forcar_etl = TRUE
+      )
+      rv$app_data    <- nd
+      rv$last_sync   <- format(Sys.time(), "%d/%m/%Y %H:%M")
+      rv$sync_status <- "ok"
+      APP_DATA_GLOBAL <<- nd   # propaga para novas sessões
       showNotification("✓ Dados atualizados!", type = "message", duration = 4)
     }, error = function(e) {
       rv$sync_status <- "err"

@@ -1,26 +1,10 @@
 # ============================================================
-# BSB.STAY — Extrato do Proprietário
-# app.R — v3.0: Análise Completa de Despesas, Custos,
-#               Ordens de Serviço e Diária entre Check-ins
-#
-# Novidades v3.0 (sobre v2.0):
-#   - Seção "Operacional": Despesas | Custos por Apt. | OS
-#   - Seção "Análise da Diária": valor entre check-ins + KPIs
-#   - Todas as seções seguem os filtros de mês e imóvel
-# ============================================================
-
-# ── Bootstrap Render/Docker ───────────────────────────────────
-options(
-  shiny.host = "0.0.0.0",
-  shiny.port = as.integer(Sys.getenv("PORT", "3838"))
-)
-
-APP_ROOT <- normalizePath(Sys.getenv("APP_ROOT", "."), winslash = "/", mustWork = FALSE)
-dir.create(file.path(APP_ROOT, "data", "cache"), recursive = TRUE, showWarnings = FALSE)
-dir.create(file.path(APP_ROOT, "data", "raw"), recursive = TRUE, showWarnings = FALSE)
-
-# ============================================================
 # app_public.R — Extrato do Proprietário autenticado por sessão
+# v3.1-render: adaptado para Render.com / Docker
+#
+# ATENÇÃO: options(shiny.host/port) e source(gdrive_public.R)
+# são feitos EXCLUSIVAMENTE em run.R. Este arquivo é um módulo
+# filho carregado via sys.source() pelo app.R roteador.
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -35,21 +19,25 @@ suppressPackageStartupMessages({
 
 APP_ROOT <- normalizePath(Sys.getenv("APP_ROOT", "."), winslash = "/", mustWork = FALSE)
 
-if (!exists("carregar_dados_app")) {
+# gdrive_public.R já foi carregado por run.R; só faz source se
+# este módulo for rodado de forma standalone (ex: testes locais).
+if (!exists("carregar_dados_app", inherits = TRUE)) {
   source(file.path(APP_ROOT, "R", "gdrive_public.R"), local = FALSE)
 }
 
-APP_DATA <- tryCatch(
-  carregar_dados_app(
-    file_id = DRIVE_FILE_ID,
-    folder_id = DRIVE_FOLDER_ID,
-    forcar_dl = TRUE,
-    forcar_etl = TRUE
-  ),
-  error = function(e) {
-    structure(list(), erro_msg = e$message)
-  }
-)
+# APP_DATA_GLOBAL é pré-aquecido por run.R (boot-time).
+# Se não existir (standalone), carrega agora com forcar_dl=FALSE.
+if (!exists("APP_DATA_GLOBAL", inherits = TRUE)) {
+  APP_DATA_GLOBAL <<- tryCatch(
+    carregar_dados_app(
+      file_id    = DRIVE_FILE_ID,
+      folder_id  = DRIVE_FOLDER_ID,
+      forcar_dl  = FALSE,
+      forcar_etl = FALSE
+    ),
+    error = function(e) structure(list(), erro_msg = e$message)
+  )
+}
 
 `%||%` <- function(x, y) {
   if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
@@ -363,16 +351,10 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
 
 server <- function(input, output, session) {
   
+  # APP_DATA_GLOBAL foi carregado uma vez em run.R (boot-time).
+  # Cada sessão começa com o mesmo snapshot — atualizado pelo botão Sync.
   rv <- reactiveValues(
-    app_data    = tryCatch(
-      carregar_dados_app(
-        file_id    = DRIVE_FILE_ID,
-        folder_id  = DRIVE_FOLDER_ID,
-        forcar_dl  = FALSE,
-        forcar_etl = FALSE
-      ),
-      error = function(e) structure(list(), erro_msg = e$message)
-    ),
+    app_data    = APP_DATA_GLOBAL,
     syncing     = FALSE,
     sync_status = "ok",
     last_sync   = {
@@ -485,9 +467,17 @@ server <- function(input, output, session) {
   observeEvent(input$btn_sync, {
     rv$syncing <- TRUE
     tryCatch({
-      nd <- carregar_dados_app(folder_id = DRIVE_FOLDER_ID, forcar_dl = TRUE, forcar_etl = TRUE)
-      rv$app_data  <- nd; rv$last_sync <- format(Sys.time(), "%d/%m/%Y %H:%M")
+      nd <- carregar_dados_app(
+        file_id    = DRIVE_FILE_ID,
+        folder_id  = DRIVE_FOLDER_ID,
+        forcar_dl  = TRUE,
+        forcar_etl = TRUE
+      )
+      rv$app_data    <- nd
+      rv$last_sync   <- format(Sys.time(), "%d/%m/%Y %H:%M")
       rv$sync_status <- "ok"
+      # Atualiza o cache global para que novas sessões também se beneficiem
+      APP_DATA_GLOBAL <<- nd
       showNotification("✓ Dados atualizados!", type = "message", duration = 4)
     }, error = function(e) {
       rv$sync_status <- "err"
@@ -1521,6 +1511,8 @@ server <- function(input, output, session) {
   
 } # fim server
 
-`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
-
+# app_public.R pode ser rodado de forma standalone (dev local) ou
+# carregado como módulo filho por app.R (produção).
+# Em produção, app.R acessa e$ui e chama e$server() manualmente.
+# A linha abaixo garante compatibilidade com ambos os modos.
 app <- shinyApp(ui, server)

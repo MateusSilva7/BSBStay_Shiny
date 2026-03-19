@@ -10,11 +10,18 @@
 
 APP_ROOT <- normalizePath(Sys.getenv("APP_ROOT", "."), winslash = "/", mustWork = FALSE)
 
-suppressPackageStartupMessages({ library(shiny) })
+suppressPackageStartupMessages({
+  library(shiny)
+  library(later)
+})
 
 addResourcePath("assets", APP_ROOT)
 
-source(file.path(APP_ROOT, "R", "gdrive_public.R"), local = FALSE)
+# gdrive_public.R foi carregado por run.R antes deste arquivo.
+# Guard evita dupla carga (e re-execução do .ensure_pkgs()).
+if (!exists("carregar_dados_app", inherits = TRUE)) {
+  source(file.path(APP_ROOT, "R", "gdrive_public.R"), local = FALSE)
+}
 
 # ── Helpers ──────────────────────────────────────────────────
 `%||%` <- function(x, y) {
@@ -25,83 +32,45 @@ trim_na <- function(x) {
   x[x %in% c("", "NA", "NaN")] <- NA_character_
   x
 }
-normalizar_doc <- function(x) {
-  x <- trim_na(x)
-  if (all(is.na(x))) return(NA_character_)
-  x <- gsub("[^0-9]", "", x)
-  x[x %in% c("", "NA", "NaN")] <- NA_character_
-  x
-}
 is_valid_cpf_mask  <- function(x) grepl("^\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}$",    trimws(x %||% ""))
 is_valid_cnpj_mask <- function(x) grepl("^\\d{2}\\.\\d{3}\\.\\d{3}/\\d{4}-\\d{2}$", trimws(x %||% ""))
-is_valid_doc <- function(x) {
-  n <- nchar(normalizar_doc(x) %||% "")
-  n %in% c(11, 14)
-}
+is_valid_doc_mask  <- function(x) is_valid_cpf_mask(x) || is_valid_cnpj_mask(x)
 doc_tipo <- function(x) {
-  n <- nchar(normalizar_doc(x) %||% "")
-  if (n == 11) return("CPF")
-  if (n == 14) return("CNPJ")
+  if (is_valid_cpf_mask(x))  return("CPF")
+  if (is_valid_cnpj_mask(x)) return("CNPJ")
   NA_character_
 }
 
 ADMIN_USER <- Sys.getenv("BSBSTAY_ADMIN_USER", "admin")
 ADMIN_PASS <- Sys.getenv("BSBSTAY_ADMIN_PASS", "bsbstay123")
 
-# ── Bootstrap de dados + registro de usuários ──────────────────
-boot_data_status <- tryCatch({
-  carregar_dados_app(
-    file_id = DRIVE_FILE_ID,
-    folder_id = DRIVE_FOLDER_ID,
-    forcar_dl = FALSE,
-    forcar_etl = FALSE
-  )
-  list(ok = TRUE, msg = NULL)
-}, error = function(e) {
-  message("[App] Falha no bootstrap inicial de dados: ", e$message)
-  list(ok = FALSE, msg = e$message)
-})
-
-get_auth_registry <- function() {
-  tryCatch({
-    con <- sqlite_connect()
-    on.exit(if (!is.null(con) && DBI::dbIsValid(con)) DBI::dbDisconnect(con), add = TRUE)
-    
-    dim_prop <- sqlite_read_table("dim_proprietario", con)
-    if (is.null(dim_prop) || nrow(dim_prop) == 0) {
-      carregar_dados_app(
-        file_id = DRIVE_FILE_ID,
-        folder_id = DRIVE_FOLDER_ID,
-        forcar_dl = isFALSE(boot_data_status$ok),
-        forcar_etl = isFALSE(boot_data_status$ok)
-      )
-      DBI::dbDisconnect(con)
-      con <- sqlite_connect()
-      dim_prop <- sqlite_read_table("dim_proprietario", con)
-    }
-    
-    if (is.null(dim_prop) || nrow(dim_prop) == 0) {
-      data.frame(owner_id=character(), cpf_cnpj=character(),
-                 nome_proprietario=character(), tipo_documento=character(),
-                 stringsAsFactors=FALSE)
-    } else {
-      dim_prop |>
-        dplyr::transmute(
-          owner_id          = as.character(owner_id),
-          cpf_cnpj          = normalizar_doc(cpf_cnpj),
-          nome_proprietario = trim_na(nome_proprietario),
-          tipo_documento    = vapply(cpf_cnpj, doc_tipo, character(1))
-        ) |>
-        dplyr::filter(!is.na(cpf_cnpj), nzchar(cpf_cnpj)) |>
-        dplyr::distinct(cpf_cnpj, .keep_all = TRUE)
-    }
-  }, error = function(e) {
-    message("[App] Erro ao carregar auth_registry: ", e$message)
+# ── Registro de usuários (carregado uma vez) ──────────────────
+auth_registry <- tryCatch({
+  con <- sqlite_connect()
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  dim_prop <- sqlite_read_table("dim_proprietario", con)
+  if (is.null(dim_prop) || nrow(dim_prop) == 0) {
     data.frame(owner_id=character(), cpf_cnpj=character(),
                nome_proprietario=character(), tipo_documento=character(),
                stringsAsFactors=FALSE)
-  })
-}
+  } else {
+    dim_prop |>
+      dplyr::transmute(
+        owner_id          = as.character(owner_id),
+        cpf_cnpj          = trim_na(cpf_cnpj),
+        nome_proprietario = trim_na(nome_proprietario),
+        tipo_documento    = ifelse(is_valid_cpf_mask(cpf_cnpj), "CPF",
+                                   ifelse(is_valid_cnpj_mask(cpf_cnpj), "CNPJ", NA_character_))
+      ) |>
+      dplyr::filter(!is.na(cpf_cnpj), nzchar(cpf_cnpj)) |>
+      dplyr::distinct(cpf_cnpj, .keep_all = TRUE)
+  }
+}, error = function(e) {
+  message("[App] Erro ao carregar auth_registry: ", e$message)
+  data.frame(owner_id=character(), cpf_cnpj=character(),
+             nome_proprietario=character(), tipo_documento=character(),
+             stringsAsFactors=FALSE)
+})
 
 # ── CSS compartilhado ─────────────────────────────────────────
 auth_css <- "
@@ -211,32 +180,26 @@ tela_cadastro <- fluidPage(
     tags$link(rel="stylesheet",
               href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"),
     tags$style(HTML(auth_css)),
+    # Validação de força de senha em tempo real
     tags$script(HTML("
       function checkPw(id) {
-        var v = document.getElementById(id)?.value || '';
-        var okLen = v.length >= 6;
-        var okNum = /[0-9]/.test(v);
-        var okLet = /[A-Za-zÀ-ÿ]/.test(v);
-
-        var a = document.getElementById('pw_len');
-        var b = document.getElementById('pw_num');
-        var c = document.getElementById('pw_let');
-
-        if (a) { a.className = okLen ? 'pw-ok' : 'pw-fail'; a.innerHTML = (okLen ? '✓' : '✗') + '  Mínimo 6 caracteres'; }
-        if (b) { b.className = okNum ? 'pw-ok' : 'pw-fail'; b.innerHTML = (okNum ? '✓' : '✗') + '  Pelo menos 1 número'; }
-        if (c) { c.className = okLet ? 'pw-ok' : 'pw-fail'; c.innerHTML = (okLet ? '✓' : '✗') + '  Pelo menos 1 letra'; }
+        var v = document.getElementById(id) ? document.getElementById(id).value : '';
+        document.getElementById('pw_len').className  = v.length >= 6 ? 'pw-ok' : 'pw-fail';
+        document.getElementById('pw_num').className  = /[0-9]/.test(v) ? 'pw-ok' : 'pw-fail';
+        document.getElementById('pw_let').className  = /[a-zA-Z]/.test(v) ? 'pw-ok' : 'pw-fail';
       }
-      document.addEventListener('input', function(e){
-        if(e.target && e.target.id === 'cad_senha1'){ checkPw('cad_senha1'); }
-        if(e.target && e.target.id === 'alt_senha1'){ checkPw('alt_senha1'); }
-      });
+      $(document).on('input', '#cad_senha1', function(){ checkPw('cad_senha1'); });
     "))
   ),
   div(class = "auth-shell",
-      auth_side("Seu documento precisa já estar cadastrado na base da BSB Stay. Depois disso, você cria sua senha de acesso."),
+      auth_side(HTML(paste0(
+        "Para <b>primeiro acesso</b>, informe seu CPF ou CNPJ ",
+        "e crie uma senha pessoal.<br><br>",
+        "Para <b>redefinir</b>, use o mesmo processo."
+      ))),
       div(class = "auth-main",
           div(class = "auth-card auth-form",
-              h2("Criar ou redefinir senha"),
+              h2("Criar / Redefinir Senha"),
               p("Informe seu documento cadastrado e escolha uma senha pessoal."),
               textInput("cad_doc", "CPF / CNPJ",
                         placeholder = "000.000.000-00  ou  00.000.000/0000-00"),
@@ -266,337 +229,332 @@ tela_alterar_senha <- function(nome_prop = "") {
                 href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"),
       tags$style(HTML(auth_css)),
       tags$script(HTML("
-        function checkPw2(id) {
-          var v = document.getElementById(id)?.value || '';
-          var okLen = v.length >= 6;
-          var okNum = /[0-9]/.test(v);
-          var okLet = /[A-Za-zÀ-ÿ]/.test(v);
-
-          var a = document.getElementById('pw2_len');
-          var b = document.getElementById('pw2_num');
-          var c = document.getElementById('pw2_let');
-
-          if (a) { a.className = okLen ? 'pw-ok' : 'pw-fail'; a.innerHTML = (okLen ? '✓' : '✗') + '  Mínimo 6 caracteres'; }
-          if (b) { b.className = okNum ? 'pw-ok' : 'pw-fail'; b.innerHTML = (okNum ? '✓' : '✗') + '  Pelo menos 1 número'; }
-          if (c) { c.className = okLet ? 'pw-ok' : 'pw-fail'; c.innerHTML = (okLet ? '✓' : '✗') + '  Pelo menos 1 letra'; }
-        }
-        document.addEventListener('input', function(e){
-          if(e.target && e.target.id === 'alt_senha1'){ checkPw2('alt_senha1'); }
+        $(document).on('input', '#alt_nova1', function(){
+          var v = this.value;
+          document.getElementById('apw_len').className = v.length >= 6 ? 'pw-ok':'pw-fail';
+          document.getElementById('apw_num').className = /[0-9]/.test(v) ? 'pw-ok':'pw-fail';
+          document.getElementById('apw_let').className = /[a-zA-Z]/.test(v) ? 'pw-ok':'pw-fail';
         });
       "))
     ),
     div(class = "auth-shell",
-        auth_side(HTML(paste0(
-          "Você está logado como <b>", htmltools::htmlEscape(nome_prop %||% ""), "</b>.<br><br>",
-          "Para sua segurança, você pode atualizar sua senha a qualquer momento."
-        ))),
+        auth_side(HTML(paste0("Alterando senha de <b>", nome_prop, "</b>.<br><br>",
+                              "Informe a senha atual e escolha uma nova."))),
         div(class = "auth-main",
             div(class = "auth-card auth-form",
-                h2("Alterar senha"),
-                p("Defina uma nova senha para o seu acesso."),
-                passwordInput("alt_senha1", "Nova Senha",
-                              placeholder = "Mínimo 6 caracteres"),
+                h2("Alterar Senha"),
+                p(paste0("Conta: ", nome_prop)),
+                passwordInput("alt_atual",  "Senha Atual"),
+                passwordInput("alt_nova1",  "Nova Senha",      placeholder = "Mínimo 6 caracteres"),
                 tags$ul(class = "pw-rules",
-                        tags$li(id = "pw2_len", class = "pw-fail", "✗  Mínimo 6 caracteres"),
-                        tags$li(id = "pw2_num", class = "pw-fail", "✗  Pelo menos 1 número"),
-                        tags$li(id = "pw2_let", class = "pw-fail", "✗  Pelo menos 1 letra")),
-                passwordInput("alt_senha2", "Confirmar Nova Senha"),
-                actionButton("btn_alterar_senha", "Salvar nova senha", class = "auth-btn"),
+                        tags$li(id = "apw_len", class = "pw-fail", "✗  Mínimo 6 caracteres"),
+                        tags$li(id = "apw_num", class = "pw-fail", "✗  Pelo menos 1 número"),
+                        tags$li(id = "apw_let", class = "pw-fail", "✗  Pelo menos 1 letra")),
+                passwordInput("alt_nova2",  "Confirmar Nova Senha"),
+                actionButton("btn_alterar", "Salvar Nova Senha", class = "auth-btn"),
                 div(class = "divider", "ou"),
                 tags$button(class = "auth-btn-sec",
-                            onclick = "Shiny.setInputValue('nav_app', Math.random())",
+                            onclick = "Shiny.setInputValue('nav_voltar_app', Math.random())",
                             "← Voltar ao painel"),
                 uiOutput("alterar_msg"))))
   )
 }
 
-# ── App principal ─────────────────────────────────────────────
-ui_app_principal <- function() {
-  if (file.exists(file.path(APP_ROOT, "app_public.R"))) {
-    source(file.path(APP_ROOT, "app_public.R"), local = TRUE)
-    if (exists("app_ui", inherits = FALSE)) return(app_ui)
-  }
-  fluidPage(
-    tags$head(tags$title("BSB Stay | Painel")),
-    h2("Painel carregado"),
-    p("O front-end principal deve ser definido em app_public.R como objeto `app_ui`."),
-    p("Se desejar, eu também ajusto essa camada.")
-  )
-}
-
+# ════════════════════════════════════════════════════════════
+# UI principal — roteamento reativo
+# ════════════════════════════════════════════════════════════
 ui <- uiOutput("root_ui")
 
+# ════════════════════════════════════════════════════════════
+# SERVER
+# ════════════════════════════════════════════════════════════
 server <- function(input, output, session) {
   
   rv <- reactiveValues(
-    tela = "login",
-    owner_id = NULL,
-    owner_name = NULL,
-    owner_doc = NULL,
-    is_admin = FALSE,
-    auth_error = NULL
+    tela       = "login",   # "login" | "cadastro" | "app" | "alterar_senha"
+    auth_ok    = FALSE,
+    role       = NULL,
+    doc        = NULL,
+    doc_type   = NULL,
+    owner_id   = NULL,
+    owner_name = NULL
   )
   
-  # ── Navegação entre telas ──────────────────────────────────
-  observeEvent(input$nav_cadastro, {
-    rv$tela <- "cadastro"
-  })
+  child_env <- reactiveVal(NULL)
   
-  observeEvent(input$nav_login, {
-    rv$tela <- "login"
-  })
-  
-  observeEvent(input$nav_app, {
-    rv$tela <- "app"
-  })
-  
+  # ── Roteador de UI ──────────────────────────────────────────
   output$root_ui <- renderUI({
-    if (rv$tela == "login") return(tela_login)
-    if (rv$tela == "cadastro") return(tela_cadastro)
-    if (rv$tela == "alterar") return(tela_alterar_senha(rv$owner_name))
-    ui_app_principal()
-  })
-  
-  # ── Mensagens bootstrap ────────────────────────────────────
-  output$login_msg <- renderUI({
-    msgs <- list()
-    
-    if (!isTRUE(boot_data_status$ok)) {
-      msgs <- c(msgs, list(div(class = "auth-err",
-                               paste0("Atenção: houve falha na carga inicial dos dados. ",
-                                      "O sistema tentará recarregar automaticamente. Detalhe: ",
-                                      boot_data_status$msg %||% "erro desconhecido"))))
-    }
-    
-    if (!is.null(rv$auth_error) && nzchar(rv$auth_error)) {
-      msgs <- c(msgs, list(div(class = "auth-err", rv$auth_error)))
-    }
-    
-    if (length(msgs) == 0) return(NULL)
-    tagList(msgs)
-  })
-  
-  output$cadastro_msg <- renderUI(NULL)
-  output$alterar_msg  <- renderUI(NULL)
-  
-  # ── Login ──────────────────────────────────────────────────
-  observeEvent(input$btn_login, {
-    rv$auth_error <- NULL
-    
-    doc_raw  <- trim_na(input$login_doc)
-    senha_in <- trim_na(input$login_pass)
-    
-    if (is.na(doc_raw) || !nzchar(doc_raw) || is.na(senha_in) || !nzchar(senha_in)) {
-      rv$auth_error <- "Preencha CPF/CNPJ e senha."
-      return()
-    }
-    
-    doc_norm <- normalizar_doc(doc_raw)
-    if (is.na(doc_norm) || !is_valid_doc(doc_norm)) {
-      rv$auth_error <- "Informe um CPF ou CNPJ válido."
-      return()
-    }
-    
-    # Admin
-    if (identical(trimws(doc_raw), ADMIN_USER) && identical(senha_in, ADMIN_PASS)) {
-      rv$is_admin   <- TRUE
-      rv$owner_id   <- NA_character_
-      rv$owner_name <- "Administrador"
-      rv$owner_doc  <- NA_character_
-      rv$tela       <- "app"
-      return()
-    }
-    
-    auth_registry <- get_auth_registry()
-    
-    prop <- auth_registry[auth_registry$cpf_cnpj == doc_norm, , drop = FALSE]
-    if (nrow(prop) == 0) {
-      rv$auth_error <- "Documento não encontrado na base. Verifique o CPF/CNPJ cadastrado."
-      return()
-    }
-    
-    owner_id <- prop$owner_id[1]
-    nome     <- prop$nome_proprietario[1] %||% "Proprietário"
-    
-    senha_ok <- tryCatch({
-      auth_check_password(doc_norm, senha_in)
-    }, error = function(e) {
-      rv$auth_error <- paste0("Erro ao validar a senha: ", e$message)
-      FALSE
-    })
-    
-    if (!isTRUE(senha_ok)) {
-      rv$auth_error <- "Senha inválida. Se for seu primeiro acesso, clique em “Primeiro acesso / Esqueci minha senha”."
-      return()
-    }
-    
-    rv$is_admin   <- FALSE
-    rv$owner_id   <- owner_id
-    rv$owner_name <- nome
-    rv$owner_doc  <- doc_norm
-    rv$tela       <- "app"
-  })
-  
-  # ── Cadastro / redefinição de senha ────────────────────────
-  observeEvent(input$btn_cadastrar, {
-    doc_raw <- trim_na(input$cad_doc)
-    s1      <- trim_na(input$cad_senha1)
-    s2      <- trim_na(input$cad_senha2)
-    
-    output$cadastro_msg <- renderUI(NULL)
-    
-    if (is.na(doc_raw) || !nzchar(doc_raw)) {
-      output$cadastro_msg <- renderUI(div(class = "auth-err", "Informe seu CPF/CNPJ."))
-      return()
-    }
-    
-    doc_norm <- normalizar_doc(doc_raw)
-    if (is.na(doc_norm) || !is_valid_doc(doc_norm)) {
-      output$cadastro_msg <- renderUI(div(class = "auth-err", "Informe um CPF ou CNPJ válido."))
-      return()
-    }
-    
-    if (is.na(s1) || nchar(s1) < 6 || !grepl("[0-9]", s1) || !grepl("[A-Za-zÀ-ÿ]", s1)) {
-      output$cadastro_msg <- renderUI(div(class = "auth-err",
-                                          "Sua senha precisa ter no mínimo 6 caracteres, incluindo pelo menos 1 letra e 1 número."))
-      return()
-    }
-    
-    if (!identical(s1, s2)) {
-      output$cadastro_msg <- renderUI(div(class = "auth-err", "As senhas não coincidem."))
-      return()
-    }
-    
-    auth_registry <- get_auth_registry()
-    prop <- auth_registry[auth_registry$cpf_cnpj == doc_norm, , drop = FALSE]
-    
-    if (nrow(prop) == 0) {
-      output$cadastro_msg <- renderUI(div(class = "auth-err",
-                                          "Documento não encontrado na base da BSB Stay."))
-      return()
-    }
-    
-    ok <- tryCatch({
-      auth_set_password(doc_norm, s1)
-      TRUE
-    }, error = function(e) {
-      output$cadastro_msg <- renderUI(div(class = "auth-err",
-                                          paste0("Erro ao salvar a senha: ", e$message)))
-      FALSE
-    })
-    
-    if (!isTRUE(ok)) return()
-    
-    output$cadastro_msg <- renderUI(div(class = "auth-ok",
-                                        "Senha salva com sucesso. Agora você já pode entrar no sistema."))
-  })
-  
-  # ── Alterar senha ──────────────────────────────────────────
-  observeEvent(input$btn_alterar_senha, {
-    s1 <- trim_na(input$alt_senha1)
-    s2 <- trim_na(input$alt_senha2)
-    
-    output$alterar_msg <- renderUI(NULL)
-    
-    if (isTRUE(rv$is_admin)) {
-      output$alterar_msg <- renderUI(div(class = "auth-err",
-                                         "O usuário administrador não utiliza este fluxo de alteração."))
-      return()
-    }
-    
-    if (is.null(rv$owner_doc) || !nzchar(rv$owner_doc)) {
-      output$alterar_msg <- renderUI(div(class = "auth-err",
-                                         "Não foi possível identificar o documento do usuário logado."))
-      return()
-    }
-    
-    if (is.na(s1) || nchar(s1) < 6 || !grepl("[0-9]", s1) || !grepl("[A-Za-zÀ-ÿ]", s1)) {
-      output$alterar_msg <- renderUI(div(class = "auth-err",
-                                         "Sua nova senha precisa ter no mínimo 6 caracteres, incluindo pelo menos 1 letra e 1 número."))
-      return()
-    }
-    
-    if (!identical(s1, s2)) {
-      output$alterar_msg <- renderUI(div(class = "auth-err", "As senhas não coincidem."))
-      return()
-    }
-    
-    ok <- tryCatch({
-      auth_set_password(rv$owner_doc, s1)
-      TRUE
-    }, error = function(e) {
-      output$alterar_msg <- renderUI(div(class = "auth-err",
-                                         paste0("Erro ao alterar a senha: ", e$message)))
-      FALSE
-    })
-    
-    if (!isTRUE(ok)) return()
-    
-    output$alterar_msg <- renderUI(div(class = "auth-ok",
-                                       "Senha alterada com sucesso."))
-  })
-  
-  # ── Exposição de sessão ao app principal ───────────────────
-  outputOptions(output, "root_ui", suspendWhenHidden = FALSE)
-  
-  observe({
-    session$userData$auth <- list(
-      is_authenticated = identical(rv$tela, "app"),
-      is_admin         = isTRUE(rv$is_admin),
-      owner_id         = rv$owner_id,
-      owner_name       = rv$owner_name,
-      owner_doc        = rv$owner_doc
+    switch(rv$tela,
+           "login"         = tela_login,
+           "cadastro"      = tela_cadastro,
+           "alterar_senha" = tela_alterar_senha(rv$owner_name %||% ""),
+           "app"           = {
+             e <- child_env()
+             if (is.null(e)) div(style="padding:60px;text-align:center;font-family:Inter,sans-serif;",
+                                 "⏳ Carregando painel...")
+             else e$ui
+           },
+           tela_login
     )
   })
   
-  # ── Gancho opcional do app principal ───────────────────────
-  observe({
-    if (identical(rv$tela, "app")) {
-      if (file.exists(file.path(APP_ROOT, "app_public.R"))) {
-        env_app <- new.env(parent = globalenv())
-        env_app$session_auth <- reactive({
-          list(
-            is_authenticated = TRUE,
-            is_admin         = isTRUE(rv$is_admin),
-            owner_id         = rv$owner_id,
-            owner_name       = rv$owner_name,
-            owner_doc        = rv$owner_doc
-          )
-        })
-        
-        try(source(file.path(APP_ROOT, "app_public.R"), local = env_app), silent = TRUE)
-        
-        if (exists("app_server", envir = env_app, inherits = FALSE)) {
-          try(env_app$app_server(input, output, session), silent = TRUE)
-        }
-      }
+  # ── Navegação entre telas ───────────────────────────────────
+  observeEvent(input$nav_cadastro,    { rv$tela <- "cadastro" },     ignoreInit = TRUE)
+  observeEvent(input$nav_login,       { rv$tela <- "login" },        ignoreInit = TRUE)
+  observeEvent(input$nav_voltar_app,  { rv$tela <- "app" },          ignoreInit = TRUE)
+  observeEvent(input$nav_alterar_senha, { rv$tela <- "alterar_senha" }, ignoreInit = TRUE)
+  
+  # ════════════════════════════════════════════════════════════
+  # TELA: LOGIN
+  # ════════════════════════════════════════════════════════════
+  output$login_msg <- renderUI({ NULL })
+  
+  observeEvent(input$btn_login, {
+    doc_raw  <- trim_na(input$login_doc)
+    pass_raw <- trimws(input$login_pass %||% "")
+    
+    # Validação básica
+    if (is.na(doc_raw) || !nzchar(doc_raw)) {
+      output$login_msg <- renderUI(div(class="auth-err", "⚠ Informe seu CPF ou CNPJ."))
+      return()
     }
-  })
-  
-  # ── Logout opcional ────────────────────────────────────────
-  observeEvent(input$logout, {
-    rv$is_admin   <- FALSE
-    rv$owner_id   <- NULL
-    rv$owner_name <- NULL
-    rv$owner_doc  <- NULL
-    rv$auth_error <- NULL
-    rv$tela       <- "login"
-  })
-  
-  # ── Compatibilidade com app principal ──────────────────────
-  observe({
-    session$userData$owner_id   <- rv$owner_id
-    session$userData$owner_name <- rv$owner_name
-    session$userData$is_admin   <- rv$is_admin
-    session$userData$owner_doc  <- rv$owner_doc
-  })
-  
-  # ── Atalho: trocar senha a partir do painel ────────────────
-  observeEvent(input$go_change_password, {
-    if (!isTRUE(rv$is_admin) && !is.null(rv$owner_doc)) {
-      rv$tela <- "alterar"
+    if (!nzchar(pass_raw)) {
+      output$login_msg <- renderUI(div(class="auth-err", "⚠ Informe sua senha."))
+      return()
     }
-  })
+    
+    # ── Login admin ──────────────────────────────────────────
+    if (identical(doc_raw, ADMIN_USER) && identical(pass_raw, ADMIN_PASS)) {
+      .fazer_login_admin(rv, session, child_env)
+      return()
+    }
+    
+    # ── Login proprietário ───────────────────────────────────
+    if (!is_valid_doc_mask(doc_raw)) {
+      output$login_msg <- renderUI(div(class="auth-err",
+                                       "⚠ Formato inválido. Use CPF (000.000.000-00) ou CNPJ (00.000.000/0000-00)."))
+      return()
+    }
+    
+    # Verificar se está no registro
+    hit <- auth_registry[auth_registry$cpf_cnpj == doc_raw, , drop = FALSE]
+    if (nrow(hit) == 0) {
+      output$login_msg <- renderUI(div(class="auth-err",
+                                       "⚠ Documento não encontrado. Verifique a pontuação ou entre em contato com a BSBStay."))
+      return()
+    }
+    
+    # Verificar se tem senha cadastrada
+    tem_senha <- tryCatch(auth_tem_senha(doc_raw), error = function(e) FALSE)
+    if (!tem_senha) {
+      output$login_msg <- renderUI(div(class="auth-err",
+                                       "⚠ Você ainda não criou uma senha. Clique em \"Primeiro acesso\" abaixo."))
+      return()
+    }
+    
+    # Verificar senha
+    ok <- tryCatch(auth_check_senha(doc_raw, pass_raw), error = function(e) FALSE)
+    if (!ok) {
+      output$login_msg <- renderUI(div(class="auth-err", "⚠ Senha incorreta."))
+      return()
+    }
+    
+    # Sucesso
+    .fazer_login_owner(rv, session, child_env, hit)
+  }, ignoreInit = TRUE)
+  
+  # ════════════════════════════════════════════════════════════
+  # TELA: CADASTRO / REDEFINIÇÃO DE SENHA
+  # ════════════════════════════════════════════════════════════
+  output$cadastro_msg <- renderUI({ NULL })
+  
+  observeEvent(input$btn_cadastrar, {
+    doc_raw <- trim_na(input$cad_doc)
+    s1      <- trimws(input$cad_senha1 %||% "")
+    s2      <- trimws(input$cad_senha2 %||% "")
+    
+    # Validação do documento
+    if (is.na(doc_raw) || !nzchar(doc_raw)) {
+      output$cadastro_msg <- renderUI(div(class="auth-err", "⚠ Informe seu CPF ou CNPJ."))
+      return()
+    }
+    if (!is_valid_doc_mask(doc_raw)) {
+      output$cadastro_msg <- renderUI(div(class="auth-err",
+                                          "⚠ Formato inválido. Use CPF (000.000.000-00) ou CNPJ (00.000.000/0000-00)."))
+      return()
+    }
+    
+    # Verificar se está no cadastro
+    hit <- auth_registry[auth_registry$cpf_cnpj == doc_raw, , drop = FALSE]
+    if (nrow(hit) == 0) {
+      output$cadastro_msg <- renderUI(div(class="auth-err",
+                                          "⚠ Documento não encontrado no sistema. Entre em contato com a BSBStay."))
+      return()
+    }
+    
+    # Validação da senha
+    if (nchar(s1) < 6) {
+      output$cadastro_msg <- renderUI(div(class="auth-err", "⚠ A senha deve ter pelo menos 6 caracteres."))
+      return()
+    }
+    if (!grepl("[0-9]", s1)) {
+      output$cadastro_msg <- renderUI(div(class="auth-err", "⚠ A senha deve conter pelo menos 1 número."))
+      return()
+    }
+    if (!grepl("[a-zA-Z]", s1)) {
+      output$cadastro_msg <- renderUI(div(class="auth-err", "⚠ A senha deve conter pelo menos 1 letra."))
+      return()
+    }
+    if (!identical(s1, s2)) {
+      output$cadastro_msg <- renderUI(div(class="auth-err", "⚠ As senhas não coincidem."))
+      return()
+    }
+    
+    # Salvar senha
+    ok <- tryCatch({
+      auth_set_senha(doc_raw, s1)
+      TRUE
+    }, error = function(e) {
+      message("[Auth] Erro ao salvar senha: ", e$message)
+      FALSE
+    })
+    
+    if (!ok) {
+      output$cadastro_msg <- renderUI(div(class="auth-err",
+                                          "⚠ Erro ao salvar senha. Tente novamente."))
+      return()
+    }
+    
+    nome <- hit$nome_proprietario[[1]] %||% "Proprietário"
+    output$cadastro_msg <- renderUI(div(class="auth-ok",
+                                        paste0("✅ Senha criada com sucesso! Bem-vindo(a), ", nome, ". Faça login agora.")))
+    
+    # Redirecionar para login após 2 segundos
+    shinyjs_delay_nav <- function() {
+      invalidateLater(2000, session)
+      observeEvent(TRUE, { rv$tela <- "login" }, once = TRUE, ignoreInit = FALSE)
+    }
+    later::later(function() { rv$tela <- "login" }, delay = 2)
+    
+  }, ignoreInit = TRUE)
+  
+  # ════════════════════════════════════════════════════════════
+  # TELA: ALTERAR SENHA (pós-login)
+  # ════════════════════════════════════════════════════════════
+  output$alterar_msg <- renderUI({ NULL })
+  
+  observeEvent(input$btn_alterar, {
+    req(rv$auth_ok, rv$role == "owner", rv$doc)
+    
+    atual  <- trimws(input$alt_atual  %||% "")
+    nova1  <- trimws(input$alt_nova1  %||% "")
+    nova2  <- trimws(input$alt_nova2  %||% "")
+    
+    if (!nzchar(atual)) {
+      output$alterar_msg <- renderUI(div(class="auth-err", "⚠ Informe a senha atual."))
+      return()
+    }
+    
+    # Verificar senha atual
+    ok_atual <- tryCatch(auth_check_senha(rv$doc, atual), error = function(e) FALSE)
+    if (!ok_atual) {
+      output$alterar_msg <- renderUI(div(class="auth-err", "⚠ Senha atual incorreta."))
+      return()
+    }
+    
+    if (nchar(nova1) < 6 || !grepl("[0-9]", nova1) || !grepl("[a-zA-Z]", nova1)) {
+      output$alterar_msg <- renderUI(div(class="auth-err",
+                                         "⚠ A nova senha deve ter 6+ caracteres, 1 letra e 1 número."))
+      return()
+    }
+    if (!identical(nova1, nova2)) {
+      output$alterar_msg <- renderUI(div(class="auth-err", "⚠ As senhas não coincidem."))
+      return()
+    }
+    
+    ok <- tryCatch({ auth_set_senha(rv$doc, nova1); TRUE }, error = function(e) FALSE)
+    if (!ok) {
+      output$alterar_msg <- renderUI(div(class="auth-err", "⚠ Erro ao salvar. Tente novamente."))
+      return()
+    }
+    
+    output$alterar_msg <- renderUI(div(class="auth-ok", "✅ Senha alterada com sucesso!"))
+    later::later(function() { rv$tela <- "app" }, delay = 2)
+    
+  }, ignoreInit = TRUE)
+  
+  # ════════════════════════════════════════════════════════════
+  # Carregamento do módulo filho (app_master ou app_public)
+  # ════════════════════════════════════════════════════════════
+  observeEvent(rv$auth_ok, {
+    req(isTRUE(rv$auth_ok))
+    if (!is.null(child_env())) return()
+    
+    arquivo <- if (identical(rv$role, "admin")) "app_master.R" else "app_public.R"
+    e <- new.env(parent = globalenv())
+    
+    # sys.source executa o arquivo inteiro, incluindo o shinyApp() final.
+    # Isso é intencional: expõe e$ui e e$server para uso abaixo,
+    # e e$app para compatibilidade standalone. Não inicia um segundo servidor.
+    carregou_ok <- tryCatch({
+      sys.source(file.path(APP_ROOT, arquivo), envir = e)
+      TRUE
+    }, error = function(err) {
+      message("[app.R] Erro ao carregar módulo '", arquivo, "': ", err$message)
+      showNotification(
+        paste("Erro ao carregar painel:", err$message),
+        type = "error", duration = NULL
+      )
+      FALSE
+    })
+    
+    if (!carregou_ok) return()
+    
+    child_env(e)
+    
+    if (exists("server", envir = e, inherits = FALSE))
+      e$server(input, output, session)
+    
+    # Expõe callback para o módulo filho acionar a tela de alterar senha
+    session$userData$fn_alterar_senha <- function() { rv$tela <- "alterar_senha" }
+    
+  }, ignoreInit = TRUE, once = TRUE)
+}
+
+# ── Helpers internos ─────────────────────────────────────────
+.fazer_login_admin <- function(rv, session, child_env) {
+  session$userData$auth_ok         <- TRUE
+  session$userData$auth_role       <- "admin"
+  session$userData$auth_doc        <- NULL
+  session$userData$auth_doc_type   <- NULL
+  session$userData$auth_owner_id   <- NULL
+  session$userData$auth_owner_name <- "BSB Stay (Admin)"
+  rv$auth_ok    <- TRUE
+  rv$role       <- "admin"
+  rv$doc        <- NULL
+  rv$owner_name <- "BSB Stay (Admin)"
+  rv$tela       <- "app"
+}
+
+.fazer_login_owner <- function(rv, session, child_env, hit) {
+  doc_raw <- hit$cpf_cnpj[[1]]
+  nome    <- hit$nome_proprietario[[1]] %||% "Proprietário"
+  tipo    <- hit$tipo_documento[[1]]    %||% doc_tipo(doc_raw)
+  oid     <- hit$owner_id[[1]]
+  
+  session$userData$auth_ok         <- TRUE
+  session$userData$auth_role       <- "owner"
+  session$userData$auth_doc        <- doc_raw
+  session$userData$auth_doc_type   <- tipo
+  session$userData$auth_owner_id   <- oid
+  session$userData$auth_owner_name <- nome
+  rv$auth_ok    <- TRUE
+  rv$role       <- "owner"
+  rv$doc        <- doc_raw
+  rv$doc_type   <- tipo
+  rv$owner_id   <- oid
+  rv$owner_name <- nome
+  rv$tela       <- "app"
 }
 
 app <- shinyApp(ui, server)
