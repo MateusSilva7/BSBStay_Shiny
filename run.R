@@ -1,4 +1,4 @@
-# run.R — ponto de entrada para Docker / Render.com
+# run.R — execução explícita para Docker/Render
 options(
   shiny.host = "0.0.0.0",
   shiny.port = as.integer(Sys.getenv("PORT", "3838"))
