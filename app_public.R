@@ -19,59 +19,26 @@ APP_ROOT <- normalizePath(Sys.getenv("APP_ROOT", "."), winslash = "/", mustWork 
 dir.create(file.path(APP_ROOT, "data", "cache"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(APP_ROOT, "data", "raw"), recursive = TRUE, showWarnings = FALSE)
 
+# ============================================================
+# app_public.R — Extrato do Proprietário autenticado por sessão
+# ============================================================
+
 suppressPackageStartupMessages({
   library(shiny)
+  library(bslib)
   library(dplyr)
-  library(tidyr)
   library(lubridate)
-  library(readxl)
-  library(janitor)
   library(plotly)
   library(DT)
-  library(DBI)
-  library(RSQLite)
-  library(shinycssloaders)
-  library(stringr)
+  library(htmltools)
 })
 
-source(file.path(APP_ROOT, "R", "gdrive_public.R"), local = FALSE)
+APP_ROOT <- normalizePath(Sys.getenv("APP_ROOT", "."), winslash = "/", mustWork = FALSE)
 
-# ── Helpers ────────────────────────────────────────────────────
-`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
-
-brl <- function(x) {
-  paste0("R$ ", format(round(as.numeric(x)), big.mark = ".", decimal.mark = ",", scientific = FALSE))
-}
-brl_compact <- function(x) {
-  v <- as.numeric(x)
-  if (is.na(v)) return("R$ —")
-  if (abs(v) >= 1000) paste0("R$ ", format(round(v/1000, 1), nsmall=1), "k")
-  else brl(v)
+if (!exists("carregar_dados_app")) {
+  source(file.path(APP_ROOT, "R", "gdrive_public.R"), local = FALSE)
 }
 
-kcard <- function(lbl, val, delta, dn = FALSE, vg = FALSE, icon = "") {
-  div(class = "kcard",
-      div(class = "klbl", if (nzchar(icon)) paste(icon, lbl) else lbl),
-      div(class = if (vg) "kval g" else "kval", val),
-      div(class = if (dn) "kdelta dn" else "kdelta up", delta)
-  )
-}
-kcard_sm <- function(lbl, val, cor = "blue") {
-  cor_map <- c(blue="#1a6ef7", green="#00b388", red="#e03e3e", orange="#d97706", purple="#7c3aed")
-  clr <- cor_map[[cor]] %||% "#1a6ef7"
-  div(class = "kcard-sm",
-      div(class = "ksm-lbl", lbl),
-      div(class = "ksm-val", style = paste0("color:", clr), val)
-  )
-}
-frow <- function(lbl, val, neg = FALSE) {
-  div(class = "fr",
-      span(class = "fl", lbl),
-      span(class = if (neg) "fv r" else "fv", val))
-}
-
-# ── Carregamento inicial ────────────────────────────────────────
-# ── Carregamento inicial ────────────────────────────────────────
 APP_DATA <- tryCatch(
   carregar_dados_app(
     file_id = DRIVE_FILE_ID,
@@ -84,9 +51,88 @@ APP_DATA <- tryCatch(
   }
 )
 
-# ═══════════════════════════════════════════════════════════════
-# UI
-# ═══════════════════════════════════════════════════════════════
+`%||%` <- function(x, y) {
+  if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
+}
+
+TOKEN_TODOS <- "__todos__"
+
+MESES_PT_FULL <- c(
+  "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+  "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"
+)
+
+MESES_PT_ABBR <- c(
+  "jan", "fev", "mar", "abr", "mai", "jun",
+  "jul", "ago", "set", "out", "nov", "dez"
+)
+
+fmt_mes_pt <- function(x, abreviado = FALSE) {
+  x <- as.character(x)
+  d <- suppressWarnings(as.Date(paste0(substr(x, 1, 7), "-01")))
+  if (all(is.na(d))) return(x)
+  mes <- as.integer(format(d, "%m"))
+  ano <- format(d, "%Y")
+  lab <- if (abreviado) MESES_PT_ABBR[mes] else MESES_PT_FULL[mes]
+  paste0(tools::toTitleCase(lab), "/", ano)
+}
+
+fmt_currency <- function(x) {
+  v <- suppressWarnings(as.numeric(x))
+  if (length(v) == 0) return("R$ —")
+  ifelse(
+    is.na(v),
+    "R$ —",
+    paste0("R$ ", formatC(v, format = "f", digits = 2, big.mark = ".", decimal.mark = ","))
+  )
+}
+
+# brl vetorizada — segura dentro de dplyr::transmute
+brl <- function(x) {
+  sapply(x, function(v) {
+    v <- suppressWarnings(as.numeric(v))
+    if (is.na(v)) return("R$ \u2014")
+    paste0("R$ ", formatC(v, format = "f", digits = 2, big.mark = ".", decimal.mark = ","))
+  }, USE.NAMES = FALSE)
+}
+
+
+safe_num <- function(x, default = 0) {
+  y <- suppressWarnings(as.numeric(x))
+  y[is.na(y)] <- default
+  y
+}
+
+safe_date_month <- function(x) {
+  if (inherits(x, "Date")) return(as.Date(format(x, "%Y-%m-01")))
+  suppressWarnings(as.Date(paste0(substr(as.character(x), 1, 7), "-01")))
+}
+
+kcard <- function(lbl, val, delta = "", dn = FALSE, vg = FALSE, icon = "", extra_class = "") {
+  div(
+    class = paste("kcard", extra_class),
+    div(class = "klbl", if (nzchar(icon)) paste(icon, lbl) else lbl),
+    div(class = if (vg) "kval g" else "kval", val),
+    div(class = if (dn) "kdelta dn" else "kdelta up", delta)
+  )
+}
+
+frow <- function(lbl, val, neg = FALSE) {
+  div(
+    class = "fr",
+    span(class = "fl", lbl),
+    span(class = if (neg) "fv r" else "fv", val)
+  )
+}
+
+kcard_sm <- function(lbl, val, cor = "blue") {
+  cor_map <- c(blue="#1a6ef7", green="#00b388", red="#e03e3e", orange="#d97706", purple="#7c3aed", teal="#0891b2")
+  clr <- cor_map[[cor]] %||% "#1a6ef7"
+  div(class = "kcard-sm",
+      div(class = "ksm-lbl", lbl),
+      div(class = "ksm-val", style = paste0("color:", clr), val))
+}
+
 ui <- fluidPage(
   tags$head(
     tags$title("BSB.STAY — Extrato do Proprietário"),
@@ -140,11 +186,18 @@ a{color:inherit;text-decoration:none;}
 .sec{font-size:10px;font-weight:800;color:#6b7280;letter-spacing:1.5px;text-transform:uppercase;margin:26px 0 10px;padding-bottom:6px;border-bottom:2px solid #e5e9ef;}
 
 /* ══ KPI CARDS ══════════════════════════════════════════════ */
-.kgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:6px;}
-@media(max-width:1100px){.kgrid{grid-template-columns:repeat(3,1fr);}}
+.kgrid{display:grid;grid-template-columns:1.6fr repeat(5,1fr);gap:14px;margin-bottom:6px;align-items:stretch;}
+@media(max-width:1200px){.kgrid{grid-template-columns:repeat(3,1fr);}}
 @media(max-width:600px){.kgrid{grid-template-columns:repeat(2,1fr);}}
 .kcard{background:#fff;border-radius:12px;padding:18px 20px;border:1px solid #e5e9ef;box-shadow:0 1px 4px rgba(0,0,0,.04);transition:box-shadow .15s;}
 .kcard:hover{box-shadow:0 3px 12px rgba(0,0,0,.08);}
+.kcard.hero{background:linear-gradient(145deg,#0a1e36 0%,#0f2d4a 100%);border:none;
+  box-shadow:0 8px 32px rgba(0,30,60,.28);padding:22px 24px;}
+.kcard.hero .klbl{color:rgba(255,255,255,.55);letter-spacing:1.2px;}
+.kcard.hero .kval{color:#ffffff;font-size:30px;}
+.kcard.hero .kval.g{color:#34d99e;}
+.kcard.hero .kdelta{color:rgba(255,255,255,.45);}
+.kcard.hero .kdelta.up{color:#34d99e;}
 .klbl{font-size:10px;font-weight:700;color:#6b7280;letter-spacing:.9px;text-transform:uppercase;margin-bottom:7px;}
 .kval{font-size:24px;font-weight:800;color:#0f1c2e;line-height:1.1;}
 .kval.g{color:#00b388;}
@@ -292,24 +345,6 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
   ),
   uiOutput("sync_bar"),
   
-  # ── Busca por CNPJ ──────────────────────────────────────────
-  div(class = "cnpj-bar",
-      div(class = "cnpj-bar-inner",
-          div(class = "cnpj-bar-title", "🔍 Acesso ao Painel"),
-          div(class = "cnpj-bar-sub",
-              "Informe o CNPJ cadastrado para visualizar os dados do seu portfólio"),
-          div(class = "cnpj-input-wrap",
-              textInput("cnpj_input", label = NULL,
-                        placeholder = "Ex.: 12.345.678/0001-90", width = "100%"),
-              tags$button(class = "cnpj-btn",
-                          onclick = "Shiny.setInputValue('btn_buscar_cnpj', Math.random())",
-                          "Acessar")
-          ),
-          uiOutput("cnpj_status"),
-          div(class = "cnpj-hint", "🔒 Dados exibidos exclusivamente para o CNPJ informado")
-      )
-  ),
-  
   uiOutput("filter_bar"),
   
   div(class = "content",
@@ -321,56 +356,38 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
 # ═══════════════════════════════════════════════════════════════
 # SERVER
 # ═══════════════════════════════════════════════════════════════
+
 server <- function(input, output, session) {
   
   rv <- reactiveValues(
-    app_data    = APP_DATA,
-    cnpj_ativo  = NULL,
-    cnpj_erro   = NULL,
+    app_data    = tryCatch(
+      carregar_dados_app(
+        file_id    = DRIVE_FILE_ID,
+        folder_id  = DRIVE_FOLDER_ID,
+        forcar_dl  = FALSE,
+        forcar_etl = FALSE
+      ),
+      error = function(e) structure(list(), erro_msg = e$message)
+    ),
     syncing     = FALSE,
     sync_status = "ok",
-    sync_msg    = "",
     last_sync   = {
       st <- tryCatch(status_cache(), error = function(e) list(last_sync = NA))
       st$last_sync
     },
-    # aba ativa da seção operacional: "despesas" | "custos" | "os"
-    op_aba      = "despesas"
+    op_aba = "despesas"
   )
   
-  # ── Busca CNPJ ──────────────────────────────────────────────
-  observeEvent(input$btn_buscar_cnpj, {
-    cnpj_raw  <- trimws(input$cnpj_input %||% "")
-    cnpj_norm <- gsub("[^0-9]", "", cnpj_raw)
-    chaves    <- gsub("[^0-9]", "", names(rv$app_data))
-    idx       <- which(chaves == cnpj_norm)
-    if (!nzchar(cnpj_raw)) {
-      rv$cnpj_ativo <- NULL; rv$cnpj_erro <- "Por favor, informe um CNPJ."
-    } else if (length(idx) == 0) {
-      rv$cnpj_ativo <- NULL
-      rv$cnpj_erro  <- paste0("CNPJ '", cnpj_raw, "' não encontrado. Verifique o número.")
-    } else {
-      rv$cnpj_ativo <- names(rv$app_data)[idx[1]]; rv$cnpj_erro <- NULL
-    }
-  }, ignoreInit = TRUE)
-  
-  output$cnpj_status <- renderUI({
-    if (!is.null(rv$cnpj_erro))
-      div(class = "cnpj-erro", HTML("⛔ "), rv$cnpj_erro)
-    else if (!is.null(rv$cnpj_ativo)) {
-      d <- rv$app_data[[rv$cnpj_ativo]]
-      div(class = "cnpj-ok", HTML("✅ "),
-          paste0("Bem-vindo(a), ", d$proprietario, "! Dados carregados."))
-    }
-  })
-  
-  # ── Aba operacional ─────────────────────────────────────────
   observeEvent(input$btn_aba_op, { rv$op_aba <- input$btn_aba_op }, ignoreInit = TRUE)
   
   # ── Reactives base ──────────────────────────────────────────
   dados <- reactive({
-    req(rv$cnpj_ativo)
-    rv$app_data[[rv$cnpj_ativo]]
+    req(identical(session$userData$auth_role, "owner"))
+    doc   <- as.character(session$userData$auth_doc)
+    chaves <- gsub("[^0-9]", "", names(rv$app_data))
+    idx    <- which(chaves == gsub("[^0-9]", "", doc))
+    req(length(idx) > 0)
+    rv$app_data[[idx[1]]]
   })
   
   meses_disponiveis <- reactive({
@@ -389,8 +406,9 @@ server <- function(input, output, session) {
   
   rm <- reactive({
     req(input$mes_sel)
-    rec_fil() |>
-      dplyr::filter(competencia == input$mes_sel) |>
+    df_mes <- rec_fil() |> dplyr::filter(competencia == input$mes_sel)
+    n_im <- dplyr::n_distinct(df_mes$imovel)
+    out  <- df_mes |>
       dplyr::summarise(
         receita_bruta = sum(receita_bruta, na.rm = TRUE),
         taxa_adm      = sum(taxa_adm,      na.rm = TRUE),
@@ -401,6 +419,9 @@ server <- function(input, output, session) {
         n_diarias     = sum(n_diarias,     na.rm = TRUE),
         .groups = "drop"
       )
+    out$n_imoveis <- n_im
+    out$revpar    <- if (!is.na(n_im) && n_im > 0) out$receita_bruta / n_im else NA_real_
+    out
   })
   
   # Filtra reservas por mês e imóvel
@@ -444,15 +465,17 @@ server <- function(input, output, session) {
   })
   
   # ── Sync ──────────────────────────────────────────────────────
+  
+  # ── Sync ──────────────────────────────────────────────────────
   output$sync_bar <- renderUI({
     dot_class <- paste("sync-dot", rv$sync_status)
-    msg_txt <- if (rv$syncing) "⏳ Sincronizando..." else if (!is.na(rv$last_sync))
-      paste0("✓ Última sincronização: ", rv$last_sync) else "⚠ Dados não sincronizados"
+    msg_txt <- if (rv$syncing) "\u23f3 Sincronizando..." else if (!is.na(rv$last_sync))
+      paste0("\u2713 \u00daltima sincroniza\u00e7\u00e3o: ", rv$last_sync) else "\u26a0 Dados n\u00e3o sincronizados"
     div(class = "sync-bar",
         div(class = dot_class), span(msg_txt),
         tags$button(class = "sync-btn",
-                    onclick = "Shiny.setInputValue('btn_sync', Math.random())",
-                    if (rv$syncing) "⏳ Aguarde..." else "↻ Atualizar dados"))
+                    onclick = "Shiny.setInputValue(\'btn_sync\', Math.random())",
+                    if (rv$syncing) "\u23f3 Aguarde..." else "\u21bb Atualizar dados"))
   })
   
   observeEvent(input$btn_sync, {
@@ -461,9 +484,6 @@ server <- function(input, output, session) {
       nd <- carregar_dados_app(folder_id = DRIVE_FOLDER_ID, forcar_dl = TRUE, forcar_etl = TRUE)
       rv$app_data  <- nd; rv$last_sync <- format(Sys.time(), "%d/%m/%Y %H:%M")
       rv$sync_status <- "ok"
-      if (!is.null(rv$cnpj_ativo) && is.null(nd[[rv$cnpj_ativo]])) {
-        rv$cnpj_ativo <- NULL; rv$cnpj_erro <- "CNPJ não encontrado nos dados atualizados."
-      }
       showNotification("✓ Dados atualizados!", type = "message", duration = 4)
     }, error = function(e) {
       rv$sync_status <- "err"
@@ -473,9 +493,22 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
   
   # ── Header prop ───────────────────────────────────────────────
+  
+  # ── Header ────────────────────────────────────────────────────
   output$hdr_prop <- renderUI({
     d <- dados(); req(d)
-    div(class = "hdr-prop", tags$b(d$proprietario), br(), div(class = "hdr-badge", d$perfil))
+    nome <- session$userData$auth_owner_name %||% d$proprietario %||% "Proprietário"
+    tipo <- session$userData$auth_doc_type   %||% "CPF/CNPJ"
+    div(style = "display:flex;align-items:center;gap:14px;",
+        div(class = "hdr-prop", tags$b(nome), br(), div(class = "hdr-badge", tipo)),
+        tags$button(
+          style = paste0("background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);",
+                         "color:#c9dff2;border-radius:8px;padding:6px 12px;font-size:11px;",
+                         "font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;",
+                         "white-space:nowrap;transition:background .15s;"),
+          onclick = "Shiny.setInputValue('nav_alterar_senha', Math.random())",
+          "🔑 Alterar Senha")
+    )
   })
   
   # ── Filter bar ────────────────────────────────────────────────
@@ -486,28 +519,25 @@ server <- function(input, output, session) {
       datas <- suppressWarnings(as.Date(paste0(meses, "-01")))
       ifelse(is.na(datas), meses, format(datas, "%B/%Y"))
     })
-    imoveis <- c("Todos os imóveis" = "all", setNames(d$imoveis_ids, d$imoveis_ids))
+    imoveis <- c("Todos os im\u00f3veis" = "all", setNames(d$imoveis_ids, d$imoveis_ids))
     div(class = "fbar",
-        div(class = "fbar-lbl", "MÊS:"),
+        div(class = "fbar-lbl", "M\u00cAS:"),
         selectInput("mes_sel", NULL, choices = meses_lbl, selected = meses[1], width = "180px"),
-        div(class = "fbar-lbl", "IMÓVEL:"),
-        selectInput("imovel", NULL, choices = imoveis, selected = "all", width = "260px"))
+        div(class = "fbar-lbl", "IM\u00d3VEL:"),
+        selectInput("imovel",  NULL, choices = imoveis,   selected = "all",    width = "260px"))
   })
   
   output$alerta_erro <- renderUI({
     msg <- attr(rv$app_data, "erro_msg")
-    if (!is.null(msg)) div(class = "erro-dados", tags$b("⚠ Atenção: "), msg)
+    if (!is.null(msg)) div(class = "erro-dados", tags$b("\u26a0 Aten\u00e7\u00e3o: "), msg)
   })
   
-  # ═══════════════════════════════════════════════════════════
-  # BODY PRINCIPAL
-  # ═══════════════════════════════════════════════════════════
   output$body <- renderUI({
     d <- dados()
     if (is.null(d)) {
       return(div(class = "empty-state",
-                 h3("🏠 Informe seu CNPJ para começar"),
-                 p("Digite o CNPJ cadastrado acima e clique em Acessar.")))
+                 h3("⏳ Carregando dados..."),
+                 p("Aguarde enquanto os dados são preparados.")))
     }
     req(input$mes_sel)
     m <- isolate(rm())
@@ -526,11 +556,17 @@ server <- function(input, output, session) {
       # ════════════════════════════════════════
       div(class = "sec", "RESULTADOS DO MÊS"),
       div(class = "kgrid",
-          kcard("Receita Bruta",  brl(m$receita_bruta), "receita do período"),
-          kcard("Taxa Adm.",       brl(m$taxa_adm),      "20% da receita", dn = TRUE),
-          kcard("Outros Custos",   brl(m$outros_custos), "fixa + variável", dn = TRUE),
-          kcard("Resultado Líq.", brl(m$resultado_liq), "após todos os custos", vg = TRUE),
-          kcard("Ocupação", paste0(round(m$ocupacao), "%"),
+          # Resultado Líquido — card principal em destaque
+          kcard("Resultado Líquido", brl(m$resultado_liq),
+                paste0("receita: ", brl(m$receita_bruta)),
+                vg = TRUE, extra_class = "hero"),
+          kcard("Receita Bruta",  brl(m$receita_bruta),  "receita do período"),
+          kcard("RevPAR",
+                brl(if (!is.na(m$revpar)) m$revpar else 0),
+                paste0(m$n_imoveis, " imóvel(is) no filtro"), icon = "📈"),
+          kcard("Taxa Adm.",      brl(m$taxa_adm),       "20% da receita",   dn = TRUE),
+          kcard("Outros Custos",  brl(m$outros_custos),  "fixa + variável",  dn = TRUE),
+          kcard("Ocupação",       paste0(round(m$ocupacao), "%"),
                 paste0("Diária média: ", brl(m$diaria_media)))
       ),
       
@@ -636,6 +672,11 @@ server <- function(input, output, session) {
                 class = paste("op-tab", if (rv$op_aba == "os") "active" else ""),
                 onclick = "Shiny.setInputValue('btn_aba_op', 'os', {priority: 'event'})",
                 "🔧 Ordens de Serviço"
+              ),
+              tags$button(
+                class = paste("op-tab", if (rv$op_aba == "reposicao") "active" else ""),
+                onclick = "Shiny.setInputValue('btn_aba_op', 'reposicao', {priority: 'event'})",
+                "📦 Reposição"
               )
           ),
           uiOutput("painel_operacional")
@@ -685,7 +726,8 @@ server <- function(input, output, session) {
     cal <- d$calendario
     if (is.null(cal) || nrow(cal) == 0) validate(need(FALSE, "Sem dados diários."))
     cal <- cal |>
-      dplyr::filter(apto_original == iid, format(as.Date(data), "%Y-%m") == input$mes_sel) |>
+      dplyr::filter(apto_original == iid | property_id == iid,
+                    substr(as.character(data), 1, 7) == input$mes_sel) |>
       dplyr::arrange(data)
     validate(need(nrow(cal) > 0, "Sem dados para o período."))
     plot_ly(cal, x = ~as.Date(data), y = ~valor, type = "scatter", mode = "lines+markers",
@@ -711,7 +753,8 @@ server <- function(input, output, session) {
     cal <- d$calendario
     if (is.null(cal) || nrow(cal) == 0) return(p(class = "sem-dados", "Sem dados de ocupação."))
     cal <- cal |>
-      dplyr::filter(apto_original == iid, format(as.Date(data), "%Y-%m") == input$mes_sel) |>
+      dplyr::filter(apto_original == iid | property_id == iid,
+                    substr(as.character(data), 1, 7) == input$mes_sel) |>
       dplyr::arrange(data)
     if (nrow(cal) == 0) return(p(class = "sem-dados", "Sem dados para o período."))
     mes_inicio <- as.Date(paste0(input$mes_sel, "-01"))
@@ -741,7 +784,8 @@ server <- function(input, output, session) {
     cal <- d$calendario
     if (is.null(cal) || nrow(cal) == 0) return(NULL)
     cal_fil <- cal |>
-      dplyr::filter(apto_original == iid, format(as.Date(data), "%Y-%m") == input$mes_sel)
+      dplyr::filter(apto_original == iid | property_id == iid,
+                    substr(as.character(data), 1, 7) == input$mes_sel)
     if (nrow(cal_fil) == 0) return(NULL)
     mes_label_sel <- {
       dt <- suppressWarnings(as.Date(paste0(input$mes_sel, "-01")))
@@ -769,7 +813,8 @@ server <- function(input, output, session) {
     cal <- d$calendario
     if (is.null(cal) || nrow(cal) == 0) return(NULL)
     cal_fil <- cal |>
-      dplyr::filter(apto_original == iid, format(as.Date(data), "%Y-%m") == input$mes_sel)
+      dplyr::filter(apto_original == iid | property_id == iid,
+                    substr(as.character(data), 1, 7) == input$mes_sel)
     if (nrow(cal_fil) == 0) return(NULL)
     mes_badge_sm <- {
       dt <- suppressWarnings(as.Date(paste0(input$mes_sel, "-01")))
@@ -961,6 +1006,18 @@ server <- function(input, output, session) {
         )
       )
       
+    } else if (aba == "reposicao") {
+      # ── ABA: Reposição ────────────────────────────────────
+      tagList(
+        shinycssloaders::withSpinner(uiOutput("kpis_reposicao"), type = 4, color = "#0891b2"),
+        div(class = "card", style = "margin-top:0;",
+            div(class = "card-hdr",
+                div(class = "card-ttl", "Itens de Reposição"),
+                span(class = "badge badge-teal", "Mês selecionado")),
+            div(class = "tab-wrap",
+                shinycssloaders::withSpinner(DTOutput("t_reposicao"), type = 4, color = "#0891b2"))
+        )
+      )
     } else {
       # ── ABA: Ordens de Serviço ────────────────────────────
       tagList(
@@ -975,6 +1032,7 @@ server <- function(input, output, session) {
       )
     }
   })
+  
   
   # ── KPIs Despesas ────────────────────────────────────────────
   output$kpis_despesas <- renderUI({
@@ -1209,6 +1267,95 @@ server <- function(input, output, session) {
   }, server = FALSE)
   
   # ═══════════════════════════════════════════════════════════
+  # ── KPIs Reposição ───────────────────────────────────────────
+  output$kpis_reposicao <- renderUI({
+    rep <- reposicao_fil()
+    if (nrow(rep) == 0) return(p(class = "sem-dados", "Sem itens de reposição para o período."))
+    
+    total_val  <- sum(suppressWarnings(as.numeric(rep$valor_unitario_ou_total)), na.rm = TRUE)
+    total_qtd  <- sum(suppressWarnings(as.numeric(rep$quantidade)), na.rm = TRUE)
+    n_itens    <- nrow(rep)
+    n_aptos    <- if ("apto_original" %in% names(rep)) length(unique(rep$apto_original)) else
+      if ("imovel_nome"   %in% names(rep)) length(unique(rep$imovel_nome))   else "—"
+    item_freq  <- if ("item_limpo" %in% names(rep)) {
+      tc <- sort(table(rep$item_limpo), decreasing = TRUE)
+      if (length(tc) > 0) names(tc)[1] else "—"
+    } else if ("item_raw" %in% names(rep)) {
+      tc <- sort(table(rep$item_raw), decreasing = TRUE)
+      if (length(tc) > 0) names(tc)[1] else "—"
+    } else "—"
+    ticket_med <- if (n_itens > 0) total_val / n_itens else 0
+    
+    div(class = "kgrid-sm",
+        kcard_sm("Total Reposição",   brl(total_val),               "teal"),
+        kcard_sm("Qtd. Total",        as.character(round(total_qtd)), "blue"),
+        kcard_sm("Nº de Itens",       as.character(n_itens),        "purple"),
+        kcard_sm("Aptos Afetados",    as.character(n_aptos),        "orange"),
+        kcard_sm("Item Mais Reposto", item_freq,                    "red"),
+        kcard_sm("Ticket Médio/Item", brl(ticket_med),              "teal"))
+  })
+  
+  # ── Tabela Reposição ──────────────────────────────────────────
+  output$t_reposicao <- renderDT({
+    rep <- reposicao_fil()
+    validate(need(nrow(rep) > 0, "Sem itens de reposição para o período/imóvel selecionado."))
+    
+    # Resolver coluna de imóvel
+    apto_col <- if ("apto_original" %in% names(rep)) rep$apto_original
+    else if ("imovel_nome" %in% names(rep)) rep$imovel_nome
+    else if ("property_id" %in% names(rep)) rep$property_id
+    else rep("—", nrow(rep))
+    
+    # Resolver coluna de item
+    item_col <- if ("item_limpo" %in% names(rep)) rep$item_limpo
+    else if ("item_raw" %in% names(rep)) rep$item_raw
+    else rep("—", nrow(rep))
+    
+    # Quantidade e valores
+    qtd_col   <- suppressWarnings(as.numeric(if ("quantidade" %in% names(rep)) rep$quantidade else NA))
+    val_col   <- suppressWarnings(as.numeric(rep$valor_unitario_ou_total))
+    val_total <- ifelse(is.na(qtd_col) | qtd_col <= 0, val_col, qtd_col * val_col)
+    max_val   <- max(val_total, na.rm = TRUE)
+    
+    df <- data.frame(
+      `Imóvel`      = as.character(apto_col),
+      `Item`        = as.character(item_col),
+      `Qtd.`        = ifelse(is.na(qtd_col), "—", as.character(round(qtd_col))),
+      `Valor Unit.` = brl(val_col),
+      `Valor Total` = brl(val_total),
+      check.names      = FALSE,
+      stringsAsFactors = FALSE
+    )
+    
+    # Se imóvel filtrado, remover coluna redundante
+    if (!is.null(input$imovel) && nzchar(input$imovel) && input$imovel != "all")
+      df <- df[, names(df) != "Imóvel", drop = FALSE]
+    
+    datatable(
+      df,
+      rownames = FALSE,
+      class    = "compact stripe hover",
+      options  = list(
+        pageLength = 15,
+        dom        = "ftip",
+        order      = list(list(0, "asc"), list(1, "asc")),
+        language   = list(
+          search   = "Buscar:",
+          info     = "Mostrando _START_ a _END_ de _TOTAL_ itens",
+          paginate = list(previous = "Ant.", `next` = "Próx.")
+        )
+      )
+    ) |>
+      formatStyle(
+        "Valor Total",
+        background         = styleColorBar(c(0, if (is.finite(max_val) && max_val > 0) max_val * 1.1 else 1), "#c7f2ed"),
+        backgroundSize     = "100% 75%",
+        backgroundRepeat   = "no-repeat",
+        backgroundPosition = "center"
+      )
+  }, server = FALSE)
+  
+  
   # OUTPUT: Resultado financeiro
   # ═══════════════════════════════════════════════════════════
   output$resultado <- renderUI({
@@ -1366,9 +1513,10 @@ server <- function(input, output, session) {
               rownames=FALSE,class="compact stripe hover")
   }, server=FALSE)
   
-}
+  
+  
+} # fim server
 
-# ── Utilitário ─────────────────────────────────────────────────
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
 
 app <- shinyApp(ui, server)

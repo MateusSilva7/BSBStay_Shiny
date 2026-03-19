@@ -22,7 +22,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-RUN R -q -e "install.packages(c('shiny','dplyr','tidyr','lubridate','readxl','janitor','plotly','DT','DBI','RSQLite','shinycssloaders','stringr','htmlwidgets','bslib'), repos='https://cloud.r-project.org', Ncpus=parallel::detectCores())"
+RUN R -q -e "install.packages(c( \
+    'shiny','dplyr','tidyr','lubridate','readxl','janitor', \
+    'plotly','DT','DBI','RSQLite','shinycssloaders','stringr', \
+    'htmlwidgets','bslib','digest','later' \
+  ), repos='https://cloud.r-project.org', Ncpus=parallel::detectCores())"
 
 WORKDIR /opt/render/project/src
 
@@ -37,4 +41,4 @@ ENV APP_ROOT=/opt/render/project/src \
 
 EXPOSE 3838
 
-CMD ["R", "-q", "-e", "shiny::runApp('/opt/render/project/src', host='0.0.0.0', port=as.integer(Sys.getenv('PORT', '3838')))"]
+CMD ["R", "-q", "-f", "/opt/render/project/src/run.R"]
