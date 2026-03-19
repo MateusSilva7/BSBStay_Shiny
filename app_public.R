@@ -345,6 +345,27 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
   ),
   uiOutput("sync_bar"),
   
+<<<<<<< HEAD
+=======
+  # ── Busca por CNPJ ──────────────────────────────────────────
+  div(class = "cnpj-bar",
+      div(class = "cnpj-bar-inner",
+          div(class = "cnpj-bar-title", "🔍 Acesso ao Painel"),
+          div(class = "cnpj-bar-sub",
+              "Informe o CNPJ/CPF cadastrado para visualizar os dados do seu portfólio"),
+          div(class = "cnpj-input-wrap",
+              textInput("cnpj_input", label = NULL,
+                        placeholder = "Ex.: 12.345.678/0001-90", width = "100%"),
+              tags$button(class = "cnpj-btn",
+                          onclick = "Shiny.setInputValue('btn_buscar_cnpj', Math.random())",
+                          "Acessar")
+          ),
+          uiOutput("cnpj_status"),
+          div(class = "cnpj-hint", "🔒 Dados exibidos exclusivamente para o CNPJ/CPF informado")
+      )
+  ),
+  
+>>>>>>> ebc85cfaff96b6473c486a7aba09d8597ff9a8c0
   uiOutput("filter_bar"),
   
   div(class = "content",
