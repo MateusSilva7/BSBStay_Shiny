@@ -94,7 +94,10 @@ parse_date_safe <- function(x) {
 }
 
 normalizar_cpf_cnpj <- function(x) {
-  trimws(as.character(x))
+  x <- trimws(as.character(x))
+  x <- gsub("[^0-9]", "", x)
+  x[x %in% c("", "NA", "NaN")] <- NA_character_
+  x
 }
 
 # ── URLs de download ──────────────────────────────────────────
@@ -258,655 +261,344 @@ sqlite_read_table <- function(table_name, con = NULL) {
   DBI::dbReadTable(con, table_name)
 }
 
-sqlite_tables_exist <- function(tables, con = NULL) {
-  own <- is.null(con)
-  if (own) con <- sqlite_connect()
-  on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
-  
-  all(vapply(tables, DBI::dbExistsTable, logical(1), conn = con))
+# ── Excel helpers ──────────────────────────────────────────────
+listar_abas_excel <- function(path_xlsx) {
+  readxl::excel_sheets(path_xlsx)
 }
 
-# ── Leitura e normalização do xlsx ────────────────────────────
-ler_e_processar_db_master <- function(path_xlsx) {
-  stopifnot(file.exists(path_xlsx))
+ler_aba_segura <- function(path_xlsx, sheet) {
+  tryCatch(
+    readxl::read_excel(path_xlsx, sheet = sheet) |>
+      janitor::clean_names(),
+    error = function(e) NULL
+  )
+}
+
+achar_aba <- function(sheets, candidatos) {
+  sheets_l <- tolower(trimws(sheets))
+  cand_l   <- tolower(trimws(candidatos))
   
-  sheets_ok <- readxl::excel_sheets(path_xlsx)
+  idx_exato <- match(cand_l, sheets_l, nomatch = 0)
+  if (any(idx_exato > 0)) return(sheets[idx_exato[idx_exato > 0][1]])
   
-  obrig <- c(
-    "dim_proprietario",
-    "dim_imovel",
-    "fact_reservas",
-    "fact_manutencao",
-    "fact_reposicao",
-    "fact_repasse",
-    "fact_despesas",
-    "agg_prestacao_contas"
+  for (c in cand_l) {
+    idx <- grep(c, sheets_l, fixed = TRUE)
+    if (length(idx)) return(sheets[idx[1]])
+  }
+  
+  NA_character_
+}
+
+coluna_mais_proxima <- function(df, candidatos) {
+  nms <- names(df)
+  nms_l <- tolower(nms)
+  cand_l <- tolower(candidatos)
+  
+  idx_exato <- match(cand_l, nms_l, nomatch = 0)
+  if (any(idx_exato > 0)) return(nms[idx_exato[idx_exato > 0][1]])
+  
+  for (c in cand_l) {
+    idx <- grep(c, nms_l, fixed = TRUE)
+    if (length(idx)) return(nms[idx[1]])
+  }
+  
+  NA_character_
+}
+
+# ── Normalização de dataframes ─────────────────────────────────
+padronizar_dim_imovel <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(data.frame(
+      imovel_id = character(0),
+      nome_imovel = character(0),
+      cnpj = character(0),
+      proprietario = character(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  col_imovel_id   <- coluna_mais_proxima(df, c("imovel_id", "id_imovel", "id"))
+  col_nome_imovel <- coluna_mais_proxima(df, c("nome_imovel", "imovel", "nome"))
+  col_cnpj        <- coluna_mais_proxima(df, c("cnpj"))
+  col_prop        <- coluna_mais_proxima(df, c("proprietario", "nome_proprietario", "owner"))
+  
+  out <- data.frame(
+    imovel_id     = as.character(df[[col_imovel_id %||% 1]]),
+    nome_imovel   = as.character(df[[col_nome_imovel %||% 1]]),
+    cnpj          = if (!is.na(col_cnpj)) normalizar_cpf_cnpj(df[[col_cnpj]]) else NA_character_,
+    proprietario  = if (!is.na(col_prop)) as.character(df[[col_prop]]) else NA_character_,
+    stringsAsFactors = FALSE
   )
   
-  falt <- setdiff(obrig, sheets_ok)
-  if (length(falt)) {
-    stop("Abas faltantes no xlsx: ", paste(falt, collapse = ", "))
-  }
-  
-  out <- setNames(lapply(obrig, function(sh) {
-    df <- readxl::read_excel(path_xlsx, sheet = sh, guess_max = 5000)
-    janitor::clean_names(df)
-  }), obrig)
-  
-  # ── dim_proprietario ──
-  out$dim_proprietario <- out$dim_proprietario |>
-    dplyr::mutate(
-      owner_id          = format(as.numeric(owner_id), scientific = FALSE, trim = TRUE),
-      cpf_cnpj          = normalizar_cpf_cnpj(cpf_cnpj),
-      nome_proprietario = as.character(nome_proprietario)
-    ) |>
-    dplyr::filter(!is.na(owner_id), !is.na(cpf_cnpj), nzchar(cpf_cnpj))
-  
-  # ── dim_imovel ──
-  out$dim_imovel <- out$dim_imovel |>
-    dplyr::mutate(
-      property_id    = as.character(property_id),
-      owner_id       = format(as.numeric(owner_id), scientific = FALSE, trim = TRUE),
-      nome_canonico  = as.character(nome_canonico),
-      empreendimento = as.character(empreendimento),
-      unidade        = ifelse(is.na(unidade), NA_character_, gsub("\\.0$", "", as.character(unidade)))
-    ) |>
-    dplyr::filter(!is.na(property_id), nzchar(property_id))
-  
-  # ── agg_prestacao_contas ──
-  out$agg_prestacao_contas <- out$agg_prestacao_contas |>
-    dplyr::mutate(
-      competencia       = format(parse_date_safe(competencia), "%Y-%m"),
-      cpf_cnpj          = normalizar_cpf_cnpj(cpf_cnpj),
-      nome_proprietario = as.character(nome_proprietario),
-      owner_id          = format(as.numeric(owner_id), scientific = FALSE, trim = TRUE),
-      property_id       = as.character(property_id),
-      nome_canonico     = as.character(nome_canonico),
-      empreendimento    = as.character(empreendimento),
-      unidade           = ifelse(is.na(unidade), NA_character_, gsub("\\.0$", "", as.character(unidade))),
-      dplyr::across(
-        c(
-          noites_no_mes, dias_no_mes, taxa_ocupacao, reservas,
-          receita_liquida, diaria_media, comissao_pct, tx_adm,
-          manutencao_total, reposicao_total, despesas_total,
-          custos_total, resultado, itens_reposicao, qtd_itens
-        ),
-        ~ suppressWarnings(as.numeric(.x))
-      )
-    ) |>
-    dplyr::filter(!is.na(cpf_cnpj), nzchar(cpf_cnpj), !is.na(competencia))
-  
-  # ── fact_reservas ──
-  out$fact_reservas <- out$fact_reservas |>
-    dplyr::mutate(
-      competencia         = format(parse_date_safe(competencia), "%Y-%m"),
-      property_id         = as.character(property_id),
-      checkin             = as.character(parse_date_safe(checkin)),
-      checkout            = as.character(parse_date_safe(checkout)),
-      noites_total        = suppressWarnings(as.numeric(noites_total)),
-      noites_no_mes       = suppressWarnings(as.numeric(noites_no_mes)),
-      diaria_liquida      = suppressWarnings(as.numeric(diaria_liquida)),
-      receita_liquida_mes = suppressWarnings(as.numeric(receita_liquida_mes))
-    ) |>
-    dplyr::filter(!is.na(property_id), !is.na(checkin), !is.na(checkout))
-  
-  # ── fact_manutencao ──
-  manut_data_src <- if ("data" %in% names(out$fact_manutencao)) {
-    out$fact_manutencao[["data"]]
-  } else {
-    out$fact_manutencao[["competencia"]]
-  }
-  
-  out$fact_manutencao <- out$fact_manutencao |>
-    dplyr::mutate(
-      competencia     = format(parse_date_safe(competencia), "%Y-%m"),
-      property_id     = as.character(property_id),
-      valor_total     = suppressWarnings(as.numeric(valor_total)),
-      data            = as.character(parse_date_safe(manut_data_src)),
-      os_id           = if ("os_id" %in% names(out$fact_manutencao)) as.character(os_id) else NA_character_,
-      produto_servico = if ("produto_servico" %in% names(out$fact_manutencao)) as.character(produto_servico) else NA_character_
-    )
-  
-  # ── fact_reposicao ──
-  out$fact_reposicao <- out$fact_reposicao |>
-    dplyr::mutate(
-      competencia             = format(parse_date_safe(competencia), "%Y-%m"),
-      property_id             = as.character(property_id),
-      quantidade              = suppressWarnings(as.numeric(quantidade)),
-      valor_unitario_ou_total = suppressWarnings(as.numeric(valor_unitario_ou_total))
-    )
-  
-  # ── fact_repasse ──
-  out$fact_repasse <- out$fact_repasse |>
-    dplyr::mutate(
-      competencia = format(parse_date_safe(competencia), "%Y-%m"),
-      property_id = as.character(property_id),
-      valor       = suppressWarnings(as.numeric(valor)),
-      comissao    = suppressWarnings(as.numeric(comissao))
-    )
-  
-  # ── fact_despesas ──
-  desp_data_src <- if ("data" %in% names(out$fact_despesas)) {
-    out$fact_despesas[["data"]]
-  } else {
-    out$fact_despesas[["competencia"]]
-  }
-  
-  out$fact_despesas <- out$fact_despesas |>
-    dplyr::mutate(
-      competencia = format(parse_date_safe(competencia), "%Y-%m"),
-      property_id = as.character(property_id),
-      valor       = suppressWarnings(as.numeric(valor)),
-      data        = as.character(parse_date_safe(desp_data_src))
-    )
-  
+  out$imovel_id   <- trimws(out$imovel_id)
+  out$nome_imovel <- trimws(out$nome_imovel)
+  out$proprietario <- trimws(out$proprietario)
   out
 }
 
-# ── Pipeline principal ─────────────────────────────────────────
+padronizar_dim_proprietario <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(data.frame(
+      owner_id = character(0),
+      nome_proprietario = character(0),
+      cpf_cnpj = character(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  col_owner_id <- coluna_mais_proxima(df, c("owner_id", "id_proprietario", "id"))
+  col_nome     <- coluna_mais_proxima(df, c("nome_proprietario", "proprietario", "nome"))
+  col_doc      <- coluna_mais_proxima(df, c("cpf_cnpj", "cpf", "cnpj", "documento"))
+  
+  out <- data.frame(
+    owner_id          = as.character(df[[col_owner_id %||% 1]]),
+    nome_proprietario = as.character(df[[col_nome %||% 1]]),
+    cpf_cnpj          = if (!is.na(col_doc)) normalizar_cpf_cnpj(df[[col_doc]]) else NA_character_,
+    stringsAsFactors = FALSE
+  )
+  
+  out$owner_id          <- trimws(out$owner_id)
+  out$nome_proprietario <- trimws(out$nome_proprietario)
+  out
+}
+
+padronizar_fact_receita <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(data.frame(
+      data = as.Date(character(0)),
+      imovel_id = character(0),
+      receita = numeric(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  col_data   <- coluna_mais_proxima(df, c("data", "dt", "check_in", "competencia"))
+  col_imovel <- coluna_mais_proxima(df, c("imovel_id", "id_imovel", "imovel"))
+  col_valor  <- coluna_mais_proxima(df, c("receita", "valor_receita", "valor", "total"))
+  
+  data.frame(
+    data      = parse_date_safe(df[[col_data %||% 1]]),
+    imovel_id = as.character(df[[col_imovel %||% 1]]),
+    receita   = suppressWarnings(as.numeric(df[[col_valor %||% 1]])),
+    stringsAsFactors = FALSE
+  )
+}
+
+padronizar_fact_manutencao <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(data.frame(
+      data = as.Date(character(0)),
+      imovel_id = character(0),
+      descricao = character(0),
+      valor = numeric(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  col_data   <- coluna_mais_proxima(df, c("data", "dt", "data_servico"))
+  col_imovel <- coluna_mais_proxima(df, c("imovel_id", "id_imovel", "imovel"))
+  col_desc   <- coluna_mais_proxima(df, c("descricao", "servico", "ordem_servico", "os"))
+  col_valor  <- coluna_mais_proxima(df, c("valor", "custo", "valor_total"))
+  
+  data.frame(
+    data      = parse_date_safe(df[[col_data %||% 1]]),
+    imovel_id = as.character(df[[col_imovel %||% 1]]),
+    descricao = if (!is.na(col_desc)) as.character(df[[col_desc]]) else NA_character_,
+    valor     = suppressWarnings(as.numeric(df[[col_valor %||% 1]])),
+    stringsAsFactors = FALSE
+  )
+}
+
+padronizar_fact_despesas <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(data.frame(
+      data = as.Date(character(0)),
+      imovel_id = character(0),
+      categoria = character(0),
+      valor = numeric(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  col_data   <- coluna_mais_proxima(df, c("data", "dt", "competencia"))
+  col_imovel <- coluna_mais_proxima(df, c("imovel_id", "id_imovel", "imovel"))
+  col_cat    <- coluna_mais_proxima(df, c("categoria", "tipo", "despesa"))
+  col_valor  <- coluna_mais_proxima(df, c("valor", "valor_despesa", "total"))
+  
+  data.frame(
+    data      = parse_date_safe(df[[col_data %||% 1]]),
+    imovel_id = as.character(df[[col_imovel %||% 1]]),
+    categoria = if (!is.na(col_cat)) as.character(df[[col_cat]]) else NA_character_,
+    valor     = suppressWarnings(as.numeric(df[[col_valor %||% 1]])),
+    stringsAsFactors = FALSE
+  )
+}
+
+# ── ETL Excel -> SQLite ───────────────────────────────────────
+processar_xlsx_para_sqlite <- function(path_xlsx, sqlite_path = SQLITE_PATH) {
+  sheets <- listar_abas_excel(path_xlsx)
+  
+  aba_dim_imovel <- achar_aba(sheets, c("dim_imovel", "imoveis", "imovel"))
+  aba_dim_prop   <- achar_aba(sheets, c("dim_proprietario", "proprietarios", "proprietario"))
+  aba_receita    <- achar_aba(sheets, c("fact_receita", "receita", "receitas"))
+  aba_manut      <- achar_aba(sheets, c("fact_manutencao", "manutencao", "ordens_servico"))
+  aba_desp       <- achar_aba(sheets, c("fact_despesas", "despesas", "custos"))
+  
+  df_dim_imovel <- if (!is.na(aba_dim_imovel)) ler_aba_segura(path_xlsx, aba_dim_imovel) else NULL
+  df_dim_prop   <- if (!is.na(aba_dim_prop))   ler_aba_segura(path_xlsx, aba_dim_prop) else NULL
+  df_receita    <- if (!is.na(aba_receita))    ler_aba_segura(path_xlsx, aba_receita) else NULL
+  df_manut      <- if (!is.na(aba_manut))      ler_aba_segura(path_xlsx, aba_manut) else NULL
+  df_desp       <- if (!is.na(aba_desp))       ler_aba_segura(path_xlsx, aba_desp) else NULL
+  
+  dim_imovel       <- padronizar_dim_imovel(df_dim_imovel)
+  dim_proprietario <- padronizar_dim_proprietario(df_dim_prop)
+  fact_receita     <- padronizar_fact_receita(df_receita)
+  fact_manutencao  <- padronizar_fact_manutencao(df_manut)
+  fact_despesas    <- padronizar_fact_despesas(df_desp)
+  
+  con <- sqlite_connect(sqlite_path)
+  on.exit(if (!is.null(con) && DBI::dbIsValid(con)) DBI::dbDisconnect(con), add = TRUE)
+  
+  sqlite_write_table(dim_imovel, "dim_imovel", con)
+  sqlite_write_table(dim_proprietario, "dim_proprietario", con)
+  sqlite_write_table(fact_receita, "fact_receita", con)
+  sqlite_write_table(fact_manutencao, "fact_manutencao", con)
+  sqlite_write_table(fact_despesas, "fact_despesas", con)
+  
+  sqlite_set_meta(CACHE_META_KEY, as.character(Sys.time()), con)
+  
+  list(
+    ok = TRUE,
+    sqlite_path = sqlite_path,
+    sheets = sheets,
+    n_dim_imovel = nrow(dim_imovel),
+    n_dim_proprietario = nrow(dim_proprietario),
+    n_fact_receita = nrow(fact_receita),
+    n_fact_manutencao = nrow(fact_manutencao),
+    n_fact_despesas = nrow(fact_despesas)
+  )
+}
+
+# ── Pipeline principal ────────────────────────────────────────
 carregar_dados_app <- function(
-    file_id    = DRIVE_FILE_ID,
-    folder_id  = DRIVE_FOLDER_ID,
-    forcar_dl  = FALSE,
+    file_id = DRIVE_FILE_ID,
+    folder_id = DRIVE_FOLDER_ID,
+    forcar_dl = FALSE,
     forcar_etl = FALSE
 ) {
-  con <- sqlite_connect()
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  dl <- baixar_db_master_publico(
+    file_id = file_id,
+    destino = CACHE_XLSX,
+    forcar = forcar_dl
+  )
   
-  tabs_ok   <- sqlite_tables_exist(c("agg_prestacao_contas", "dim_imovel", "meta"), con)
-  last_sync <- sqlite_get_meta(CACHE_META_KEY, con)
-  
-  age_h <- if (!is.na(last_sync)) {
-    as.numeric(difftime(Sys.time(), as.POSIXct(last_sync), units = "hours"))
-  } else {
-    Inf
+  if (!isTRUE(dl$ok)) {
+    stop(dl$msg %||% "Falha ao obter DB_MASTER.")
   }
   
-  if (!forcar_dl && !forcar_etl && tabs_ok && age_h < MAX_CACHE_AGE_H) {
-    message(sprintf("[Cache] SQLite fresco (%.1fh). Carregando.", age_h))
-    return(montar_objeto_app_sqlite(con))
+  precisa_etl <- forcar_etl || !file.exists(SQLITE_PATH)
+  
+  if (!precisa_etl) {
+    xlsx_mtime <- if (file.exists(dl$path)) file.mtime(dl$path) else as.POSIXct(NA)
+    sql_mtime  <- if (file.exists(SQLITE_PATH)) file.mtime(SQLITE_PATH) else as.POSIXct(NA)
+    precisa_etl <- is.na(sql_mtime) || is.na(xlsx_mtime) || xlsx_mtime > sql_mtime
   }
   
-  dl <- baixar_db_master_publico(file_id = file_id, forcar = forcar_dl)
-  if (!dl$ok) stop(dl$msg)
-  
-  message("[ETL] Processando planilha...")
-  db <- ler_e_processar_db_master(dl$path)
-  
-  for (nm in names(db)) {
-    if (is.data.frame(db[[nm]])) {
-      sqlite_write_table(db[[nm]], nm, con)
-    }
-  }
-  
-  sqlite_set_meta(CACHE_META_KEY, format(Sys.time()), con)
-  
-  message("[ETL] Concluido.")
-  montar_objeto_app_sqlite(con)
-}
-
-# ── Monta objeto app a partir do SQLite ───────────────────────
-montar_objeto_app_sqlite <- function(con) {
-  message("[Montar] Lendo tabelas do SQLite...")
-  
-  agg        <- sqlite_read_table("agg_prestacao_contas", con)
-  dim_prop   <- sqlite_read_table("dim_proprietario", con)
-  dim_imovel <- sqlite_read_table("dim_imovel", con)
-  reservas   <- sqlite_read_table("fact_reservas", con)
-  manutencao <- sqlite_read_table("fact_manutencao", con)
-  reposicao  <- sqlite_read_table("fact_reposicao", con)
-  despesas   <- sqlite_read_table("fact_despesas", con)
-  
-  if (is.null(agg) || nrow(agg) == 0) {
-    stop("Tabela agg_prestacao_contas vazia. Apague o SQLite e reinicie.")
-  }
-  
-  # ── 1. Normaliza agg ──────────────────────────────────────────
-  agg <- tryCatch({
-    agg |>
-      dplyr::mutate(
-        cpf_cnpj      = normalizar_cpf_cnpj(cpf_cnpj),
-        competencia   = as.character(competencia),
-        mes           = suppressWarnings(as.Date(paste0(substr(competencia, 1, 7), "-01"))),
-        mes_label     = format(mes, "%b/%Y"),
-        imovel        = as.character(nome_canonico),
-        receita_bruta = dplyr::coalesce(as.numeric(receita_liquida), 0),
-        taxa_adm      = dplyr::coalesce(as.numeric(tx_adm), 0),
-        outros_custos = dplyr::coalesce(as.numeric(custos_total), 0) +
-          dplyr::coalesce(as.numeric(manutencao_total), 0) +
-          dplyr::coalesce(as.numeric(reposicao_total), 0) +
-          dplyr::coalesce(as.numeric(despesas_total), 0),
-        resultado_liq = dplyr::coalesce(as.numeric(resultado), 0),
-        ocupacao      = round(dplyr::coalesce(as.numeric(taxa_ocupacao), 0) * 100),
-        diaria_media  = dplyr::coalesce(as.numeric(diaria_media), 0),
-        n_diarias     = dplyr::coalesce(suppressWarnings(as.integer(as.numeric(noites_no_mes))), 0L)
-      ) |>
-      dplyr::filter(!is.na(cpf_cnpj), nzchar(cpf_cnpj), !is.na(mes))
-  }, error = function(e) {
-    stop("Erro ao normalizar agg: ", e$message)
-  })
-  
-  # ── 2. Portfolio ──────────────────────────────────────────────
-  portfolio <- tryCatch({
-    if (!is.null(dim_imovel) && nrow(dim_imovel) > 0 &&
-        !is.null(dim_prop) && nrow(dim_prop) > 0) {
-      prop_cpf <- dim_prop |>
-        dplyr::transmute(
-          owner_id = as.character(owner_id),
-          cpf_cnpj = normalizar_cpf_cnpj(cpf_cnpj)
-        ) |>
-        dplyr::filter(!is.na(owner_id), !is.na(cpf_cnpj))
-      
-      dim_imovel |>
-        dplyr::mutate(owner_id = as.character(owner_id)) |>
-        dplyr::left_join(prop_cpf, by = "owner_id") |>
-        dplyr::filter(!is.na(cpf_cnpj)) |>
-        dplyr::transmute(
-          cpf_cnpj,
-          owner_id,
-          property_id,
-          id          = as.character(nome_canonico),
-          nome        = as.character(nome_canonico),
-          bairro      = as.character(dplyr::coalesce(empreendimento, nome_canonico)),
-          tipo        = as.character(dplyr::coalesce(unidade, empreendimento, nome_canonico)),
-          plataformas = "Airbnb / Booking / Direta"
-        )
-    } else {
-      data.frame()
-    }
-  }, error = function(e) {
-    message("AVISO portfolio: ", e$message)
-    data.frame()
-  })
-  
-  # ── Mapa property_id → cpf_cnpj ──────────────────────────────
-  pid_map <- if (nrow(portfolio) > 0) {
-    portfolio |>
-      dplyr::select(property_id, cpf_cnpj, imovel_nome = nome) |>
-      dplyr::distinct(property_id, .keep_all = TRUE)
-  } else {
-    data.frame(
-      property_id = character(),
-      cpf_cnpj = character(),
-      imovel_nome = character()
-    )
-  }
-  
-  # ── 3. Calendario ─────────────────────────────────────────────
-  calendario <- tryCatch({
-    if (!is.null(reservas) && nrow(reservas) > 0 &&
-        all(c("checkin", "checkout", "property_id") %in% names(reservas))) {
-      
-      res_clean <- reservas |>
-        dplyr::mutate(
-          checkin  = parse_date_safe(checkin),
-          checkout = parse_date_safe(checkout),
-          valor    = dplyr::coalesce(as.numeric(diaria_liquida), 0)
-        ) |>
-        dplyr::filter(!is.na(checkin), !is.na(checkout), checkout > checkin) |>
-        dplyr::left_join(pid_map, by = "property_id")
-      
-      if (nrow(res_clean) == 0) return(data.frame())
-      
-      dias_list <- lapply(seq_len(nrow(res_clean)), function(i) {
-        r <- res_clean[i, ]
-        
-        datas <- tryCatch(
-          seq.Date(r$checkin, r$checkout - 1, by = "day"),
-          error = function(e) as.Date(character(0))
-        )
-        
-        if (length(datas) == 0) return(NULL)
-        
-        data.frame(
-          cpf_cnpj        = r$cpf_cnpj %||% NA_character_,
-          property_id     = r$property_id,
-          apto_original   = r$imovel_nome %||% NA_character_,
-          data            = datas,
-          valor           = r$valor,
-          ocupado         = TRUE,
-          stringsAsFactors = FALSE
-        )
-      })
-      
-      do.call(rbind, Filter(Negate(is.null), dias_list))
-    } else {
-      data.frame()
-    }
-  }, error = function(e) {
-    message("AVISO calendario: ", e$message)
-    data.frame()
-  })
-  
-  # ── 4. Reservas nível reserva ────────────────────────────────
-  reservas_clean <- tryCatch({
-    if (!is.null(reservas) && nrow(reservas) > 0) {
-      reservas |>
-        dplyr::mutate(
-          checkin        = parse_date_safe(checkin),
-          checkout       = parse_date_safe(checkout),
-          diaria_liquida = dplyr::coalesce(as.numeric(diaria_liquida), 0),
-          noites_total   = dplyr::coalesce(as.numeric(noites_total), 0),
-          receita_total  = dplyr::coalesce(as.numeric(receita_liquida_mes), 0)
-        ) |>
-        dplyr::filter(!is.na(checkin), !is.na(checkout), checkout > checkin) |>
-        dplyr::left_join(pid_map, by = "property_id") |>
-        dplyr::filter(!is.na(cpf_cnpj))
-    } else {
-      data.frame()
-    }
-  }, error = function(e) {
-    message("AVISO reservas_clean: ", e$message)
-    data.frame()
-  })
-  
-  # ── 5. Manutenção ────────────────────────────────────────────
-  manutencao_clean <- tryCatch({
-    if (!is.null(manutencao) && nrow(manutencao) > 0) {
-      manutencao |>
-        dplyr::mutate(
-          property_id     = as.character(property_id),
-          valor_total     = dplyr::coalesce(as.numeric(valor_total), 0),
-          competencia     = as.character(competencia),
-          os_id           = if ("os_id" %in% names(manutencao)) as.character(os_id) else NA_character_,
-          produto_servico = if ("produto_servico" %in% names(manutencao)) as.character(produto_servico) else NA_character_
-        ) |>
-        dplyr::left_join(pid_map, by = "property_id") |>
-        dplyr::filter(!is.na(cpf_cnpj))
-    } else {
-      data.frame()
-    }
-  }, error = function(e) {
-    message("AVISO manutencao: ", e$message)
-    data.frame()
-  })
-  
-  # ── 6. Reposição ─────────────────────────────────────────────
-  reposicao_clean <- tryCatch({
-    if (!is.null(reposicao) && nrow(reposicao) > 0) {
-      reposicao |>
-        dplyr::mutate(
-          property_id             = as.character(property_id),
-          quantidade              = dplyr::coalesce(as.numeric(quantidade), 0),
-          valor_unitario_ou_total = dplyr::coalesce(as.numeric(valor_unitario_ou_total), 0),
-          competencia             = as.character(competencia)
-        ) |>
-        dplyr::left_join(pid_map, by = "property_id") |>
-        dplyr::filter(!is.na(cpf_cnpj))
-    } else {
-      data.frame()
-    }
-  }, error = function(e) {
-    message("AVISO reposicao: ", e$message)
-    data.frame()
-  })
-  
-  # ── 7. Despesas ──────────────────────────────────────────────
-  despesas_clean <- tryCatch({
-    if (!is.null(despesas) && nrow(despesas) > 0) {
-      df <- despesas |>
-        dplyr::mutate(
-          property_id = as.character(property_id),
-          valor       = dplyr::coalesce(as.numeric(valor), 0),
-          competencia = as.character(competencia)
-        ) |>
-        dplyr::left_join(pid_map, by = "property_id") |>
-        dplyr::filter(!is.na(cpf_cnpj))
-      
-      if (!"categoria" %in% names(df)) {
-        if ("tipo" %in% names(df)) {
-          df <- dplyr::rename(df, categoria = tipo)
-        } else {
-          df <- dplyr::mutate(df, categoria = "Outras")
-        }
-      }
-      
-      df <- dplyr::mutate(
-        df,
-        categoria = dplyr::coalesce(as.character(categoria), "Outras")
-      )
-      
-      df
-    } else {
-      data.frame()
-    }
-  }, error = function(e) {
-    message("AVISO despesas: ", e$message)
-    data.frame()
-  })
-  
-  # ── 8. Owners ────────────────────────────────────────────────
-  owners <- agg |>
-    dplyr::distinct(cpf_cnpj, nome_proprietario) |>
-    dplyr::filter(!is.na(cpf_cnpj), nzchar(cpf_cnpj))
-  
-  if (nrow(portfolio) > 0) {
-    n_im <- portfolio |>
-      dplyr::count(cpf_cnpj, name = "n_imoveis")
-    
-    owners <- dplyr::left_join(owners, n_im, by = "cpf_cnpj")
-  }
-  
-  owners <- owners |>
-    dplyr::mutate(
-      n_imoveis = dplyr::coalesce(suppressWarnings(as.integer(as.numeric(n_imoveis))), 1L),
-      perfil = dplyr::case_when(
-        n_imoveis >= 4 ~ "Expansao Acelerada",
-        n_imoveis == 3 ~ "Carteira Diversificada",
-        TRUE ~ "Portfolio Concentrado"
-      )
-    )
-  
-  # ── 9. Lista final por cpf_cnpj ──────────────────────────────
-  obj <- lapply(owners$cpf_cnpj, function(cpf) {
-    orow <- owners |>
-      dplyr::filter(cpf_cnpj == cpf) |>
-      dplyr::slice(1)
-    
-    port <- if (nrow(portfolio) > 0) portfolio |> dplyr::filter(cpf_cnpj == cpf) else data.frame()
-    recs <- agg |> dplyr::filter(cpf_cnpj == cpf)
-    cal  <- if (!is.null(calendario) && nrow(calendario) > 0) calendario |> dplyr::filter(cpf_cnpj == cpf) else data.frame()
-    resv <- if (nrow(reservas_clean) > 0) reservas_clean |> dplyr::filter(cpf_cnpj == cpf) else data.frame()
-    man  <- if (nrow(manutencao_clean) > 0) manutencao_clean |> dplyr::filter(cpf_cnpj == cpf) else data.frame()
-    rep  <- if (nrow(reposicao_clean) > 0) reposicao_clean |> dplyr::filter(cpf_cnpj == cpf) else data.frame()
-    des  <- if (nrow(despesas_clean) > 0) despesas_clean |> dplyr::filter(cpf_cnpj == cpf) else data.frame()
-    
-    cfg <- if (nrow(port) > 0) {
-      lapply(seq_len(nrow(port)), function(i) {
-        as.list(port[i, c("id", "nome", "bairro", "tipo", "plataformas")])
-      })
-    } else {
-      list()
-    }
-    
-    list(
-      proprietario = orow$nome_proprietario[[1]],
-      email        = NA_character_,
-      perfil       = orow$perfil[[1]],
-      cnpj         = cpf,
-      imoveis_ids  = if (nrow(port) > 0) port$id else character(0),
-      imoveis_cfg  = cfg,
-      receitas     = recs,
-      calendario   = cal,
-      reservas     = resv,
-      manutencao   = man,
-      reposicao    = rep,
-      despesas     = des
-    )
-  })
-  
-  message(sprintf("[App] %d proprietario(s) carregado(s).", length(obj)))
-  stats::setNames(obj, owners$cpf_cnpj)
-}
-
-# ── Status ─────────────────────────────────────────────────────
-status_cache <- function() {
-  con <- sqlite_connect()
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  
-  last    <- sqlite_get_meta(CACHE_META_KEY, con)
-  tabelas <- tryCatch(DBI::dbListTables(con), error = function(e) character(0))
-  
-  cache_age_h <- if (!is.na(last)) {
-    round(as.numeric(difftime(Sys.time(), as.POSIXct(last), units = "hours")), 1)
-  } else {
-    NA_real_
+  etl <- NULL
+  if (isTRUE(precisa_etl)) {
+    etl <- processar_xlsx_para_sqlite(dl$path, SQLITE_PATH)
   }
   
   list(
-    last_sync   = last,
-    cache_age_h = cache_age_h,
-    xlsx_cache  = file.exists(CACHE_XLSX),
-    sqlite_path = SQLITE_PATH,
-    tabelas     = tabelas
+    ok = TRUE,
+    download = dl,
+    etl = etl,
+    sqlite_path = SQLITE_PATH
   )
 }
 
-# ── Diagnóstico ────────────────────────────────────────────────
-diagnostico_drive <- function(file_id = DRIVE_FILE_ID) {
-  cat("\n=============================================\n")
-  cat("  BSBStay - Diagnostico v3.1\n")
-  cat("=============================================\n\n")
-  
-  cat("1. Rede... ")
-  ok_net <- tryCatch({
-    tmp <- tempfile()
-    on.exit(unlink(tmp), add = TRUE)
-    
-    old_to <- getOption("timeout")
-    options(timeout = 10)
-    on.exit(options(timeout = old_to), add = TRUE)
-    
-    utils::download.file("https://www.google.com", tmp, quiet = TRUE, method = "libcurl") == 0
-  }, error = function(e) FALSE)
-  cat(if (ok_net) "OK\n" else "SEM REDE\n")
-  
-  fid <- trimws(file_id %||% "")
-  cat(sprintf(
-    "2. DRIVE_FILE_ID... %s\n",
-    if (nzchar(fid)) paste("OK:", fid) else "NAO CONFIGURADO"
-  ))
-  
-  st <- tryCatch(status_cache(), error = function(e) NULL)
-  
-  sqlite_msg <- if (!is.null(st) && length(st$tabelas) > 0) {
-    sprintf("%d tabelas, sync: %s", length(st$tabelas), st$last_sync %||% "nunca")
-  } else {
-    "Vazio"
+# ── Auth helpers ──────────────────────────────────────────────
+auth_hash <- function(senha, salt) {
+  if (!requireNamespace("digest", quietly = TRUE)) {
+    stop("Pacote 'digest' ausente no ambiente do container.")
   }
-  
-  cat(sprintf("3. SQLite... %s\n", sqlite_msg))
-  invisible(NULL)
+  digest::digest(paste0(trimws(senha %||% ""), "::", trimws(salt %||% "")), algo = "sha256")
 }
 
-# ── Fallback manual ────────────────────────────────────────────
-carregar_xlsx_local <- function(path_xlsx) {
-  if (!file.exists(path_xlsx)) stop("Arquivo nao encontrado: ", path_xlsx)
-  
-  dir.create(dirname(CACHE_XLSX), recursive = TRUE, showWarnings = FALSE)
-  file.copy(path_xlsx, CACHE_XLSX, overwrite = TRUE)
-  
-  con <- sqlite_connect()
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  
-  db <- ler_e_processar_db_master(CACHE_XLSX)
-  
-  for (nm in names(db)) {
-    if (is.data.frame(db[[nm]])) {
-      sqlite_write_table(db[[nm]], nm, con)
-    }
-  }
-  
-  sqlite_set_meta(CACHE_META_KEY, format(Sys.time()), con)
-  montar_objeto_app_sqlite(con)
-}
-# ══════════════════════════════════════════════════════════════
-# AUTH — Gerenciamento de senhas dos proprietários
-# Armazenadas no SQLite local com hash SHA-256 (digest)
-# ══════════════════════════════════════════════════════════════
-
-# Garante que a tabela de senhas existe no SQLite
-auth_ensure_table <- function(con = NULL) {
+auth_init_table <- function(con = NULL) {
   own <- is.null(con)
   if (own) con <- sqlite_connect()
   on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
   
-  if (!DBI::dbExistsTable(con, "auth_senhas")) {
-    DBI::dbExecute(con, "
-      CREATE TABLE auth_senhas (
-        cpf_cnpj     TEXT PRIMARY KEY,
-        senha_hash   TEXT NOT NULL,
-        criado_em    TEXT NOT NULL,
-        alterado_em  TEXT NOT NULL
-      )
-    ")
-    message("[Auth] Tabela auth_senhas criada.")
-  }
-  invisible(TRUE)
-}
-
-# Hash seguro da senha (SHA-256 com salt = cpf_cnpj)
-auth_hash <- function(senha, cpf_cnpj) {
-  if (!requireNamespace("digest", quietly = TRUE))
-    stop("Pacote 'digest' necessário para hashing de senhas.")
-  digest::digest(paste0(trimws(cpf_cnpj), "||", trimws(senha)),
-                 algo = "sha256", serialize = FALSE)
-}
-
-# Verifica se proprietário já tem senha cadastrada
-auth_tem_senha <- function(cpf_cnpj, con = NULL) {
-  own <- is.null(con)
-  if (own) con <- sqlite_connect()
-  on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
-  
-  auth_ensure_table(con)
-  cpf_norm <- trimws(as.character(cpf_cnpj))
-  
-  res <- tryCatch(
-    DBI::dbGetQuery(con,
-                    "SELECT COUNT(*) AS n FROM auth_senhas WHERE cpf_cnpj = ?",
-                    params = list(cpf_norm)),
-    error = function(e) data.frame(n = 0)
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE IF NOT EXISTS auth_owners (
+      cpf_cnpj TEXT PRIMARY KEY,
+      senha_hash TEXT NOT NULL,
+      updated_at TEXT
+    )"
   )
-  isTRUE(res$n[1] > 0)
-}
-
-# Cadastra ou atualiza senha do proprietário
-auth_set_senha <- function(cpf_cnpj, senha, con = NULL) {
-  own <- is.null(con)
-  if (own) con <- sqlite_connect()
-  on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
   
-  auth_ensure_table(con)
-  cpf_norm <- trimws(as.character(cpf_cnpj))
-  hash     <- auth_hash(senha, cpf_norm)
-  agora    <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  
-  if (auth_tem_senha(cpf_norm, con)) {
-    DBI::dbExecute(con,
-                   "UPDATE auth_senhas SET senha_hash = ?, alterado_em = ? WHERE cpf_cnpj = ?",
-                   params = list(hash, agora, cpf_norm))
-  } else {
-    DBI::dbExecute(con,
-                   "INSERT INTO auth_senhas (cpf_cnpj, senha_hash, criado_em, alterado_em) VALUES (?, ?, ?, ?)",
-                   params = list(cpf_norm, hash, agora, agora))
-  }
   invisible(TRUE)
 }
 
-# Valida senha informada contra o hash armazenado
-auth_check_senha <- function(cpf_cnpj, senha, con = NULL) {
+auth_set_password <- function(cpf_cnpj, senha, con = NULL) {
   own <- is.null(con)
   if (own) con <- sqlite_connect()
   on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
   
-  auth_ensure_table(con)
-  cpf_norm <- trimws(as.character(cpf_cnpj))
+  auth_init_table(con)
+  
+  cpf_norm <- normalizar_cpf_cnpj(cpf_cnpj)
+  if (is.na(cpf_norm) || !nzchar(cpf_norm)) stop("CPF/CNPJ inválido para cadastro de senha.")
+  if (is.null(senha) || nchar(trimws(senha)) < 6) stop("Senha deve ter no mínimo 6 caracteres.")
+  
+  hash <- auth_hash(senha, cpf_norm)
+  
+  DBI::dbExecute(
+    con,
+    "INSERT OR REPLACE INTO auth_owners (cpf_cnpj, senha_hash, updated_at) VALUES (?, ?, ?)",
+    params = list(cpf_norm, hash, as.character(Sys.time()))
+  )
+  
+  invisible(TRUE)
+}
+
+auth_has_password <- function(cpf_cnpj, con = NULL) {
+  own <- is.null(con)
+  if (own) con <- sqlite_connect()
+  on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
+  
+  auth_init_table(con)
+  
+  cpf_norm <- normalizar_cpf_cnpj(cpf_cnpj)
+  if (is.na(cpf_norm) || !nzchar(cpf_norm)) return(FALSE)
+  
+  res <- DBI::dbGetQuery(
+    con,
+    "SELECT cpf_cnpj FROM auth_owners WHERE cpf_cnpj = ? LIMIT 1",
+    params = list(cpf_norm)
+  )
+  
+  nrow(res) > 0
+}
+
+auth_check_password <- function(cpf_cnpj, senha, con = NULL) {
+  own <- is.null(con)
+  if (own) con <- sqlite_connect()
+  on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
+  
+  auth_init_table(con)
+  
+  cpf_norm <- normalizar_cpf_cnpj(cpf_cnpj)
+  if (is.na(cpf_norm) || !nzchar(cpf_norm)) return(FALSE)
   
   res <- tryCatch(
-    DBI::dbGetQuery(con,
-                    "SELECT senha_hash FROM auth_senhas WHERE cpf_cnpj = ?",
-                    params = list(cpf_norm)),
+    DBI::dbGetQuery(
+      con,
+      "SELECT senha_hash FROM auth_owners WHERE cpf_cnpj = ? LIMIT 1",
+      params = list(cpf_norm)
+    ),
     error = function(e) data.frame(senha_hash = character(0))
   )
   if (nrow(res) == 0) return(FALSE)
