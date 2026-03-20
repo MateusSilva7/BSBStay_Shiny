@@ -38,11 +38,11 @@ brl <- function(x) {
 brl_compact <- function(x) {
   v <- suppressWarnings(as.numeric(x))
   ifelse(is.na(v), "R$ —",
-    ifelse(abs(v) >= 1e6,
-      paste0("R$ ", formatC(v / 1e6, format = "f", digits = 2, decimal.mark = ","), "M"),
-      ifelse(abs(v) >= 1e3,
-        paste0("R$ ", formatC(v / 1e3, format = "f", digits = 1, decimal.mark = ","), "k"),
-        paste0("R$ ", formatC(v, format = "f", digits = 2, big.mark = ".", decimal.mark = ",")))))
+         ifelse(abs(v) >= 1e6,
+                paste0("R$ ", formatC(v / 1e6, format = "f", digits = 2, decimal.mark = ","), "M"),
+                ifelse(abs(v) >= 1e3,
+                       paste0("R$ ", formatC(v / 1e3, format = "f", digits = 1, decimal.mark = ","), "k"),
+                       paste0("R$ ", formatC(v, format = "f", digits = 2, big.mark = ".", decimal.mark = ",")))))
 }
 fmt_pct <- function(x, decimals = 1) {
   v <- suppressWarnings(as.numeric(x))
@@ -133,7 +133,7 @@ ui <- fluidPage(
     tags$title("BSB.STAY — Painel Mestre"),
     tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
     tags$link(rel = "stylesheet",
-      href = "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"),
+              href = "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"),
     tags$script(HTML("
       Shiny.addCustomMessageHandler('toggle_fbar', function(msg) {
         var prop = document.getElementById('fbar_prop');
@@ -142,7 +142,7 @@ ui <- fluidPage(
         if (cart) cart.style.display = (msg.aba === 'carteira')     ? '' : 'none';
       });
     ")),
-        tags$style(HTML("
+    tags$style(HTML("
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1e2d3d;font-size:14px;}
 a{color:inherit;text-decoration:none;}
@@ -325,15 +325,15 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
 .tab-wrap{overflow-x:auto;}
     "))
   ),
-
+  
   div(class = "hdr",
-    div(class = "hdr-left",
-      div(class = "logo", HTML("bsb.<br>STAY")),
-      div(div(class = "hdr-title", "Painel Mestre"),
-          div(class = "hdr-sub",   "Controle e Validação Interno — BSBStay")),
-      div(class = "master-badge", "🔐 USO INTERNO")
-    ),
-    uiOutput("hdr_stats")
+      div(class = "hdr-left",
+          div(class = "logo", HTML("bsb.<br>STAY")),
+          div(div(class = "hdr-title", "Painel Mestre"),
+              div(class = "hdr-sub",   "Controle e Validação Interno — BSBStay")),
+          div(class = "master-badge", "🔐 USO INTERNO")
+      ),
+      uiOutput("hdr_stats")
   ),
   uiOutput("sync_bar"),
   uiOutput("nav_tabs"),
@@ -347,7 +347,7 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
 # SERVER
 # ═══════════════════════════════════════════════════════════════
 server <- function(input, output, session) {
-
+  
   rv <- reactiveValues(
     app_data    = APP_DATA,
     aba         = "proprietario",
@@ -356,10 +356,10 @@ server <- function(input, output, session) {
     sync_status = "ok",
     last_sync   = tryCatch(status_cache(), error = function(e) list(last_sync = NA))$last_sync
   )
-
+  
   observeEvent(input$btn_aba,    { rv$aba    <- input$btn_aba    }, ignoreInit = TRUE)
   observeEvent(input$btn_aba_op, { rv$op_aba <- input$btn_aba_op }, ignoreInit = TRUE)
-
+  
   # ── Header stats ─────────────────────────────────────────────
   output$hdr_stats <- renderUI({
     d <- rv$app_data; if (length(d) == 0) return(NULL)
@@ -375,7 +375,7 @@ server <- function(input, output, session) {
         div(class = "hdr-stat", div(class = "hdr-stat-val", s_brl_compact(rec)),
             div(class = "hdr-stat-lbl", "Receita Total")))
   })
-
+  
   # ── Sync bar ─────────────────────────────────────────────────
   output$sync_bar <- renderUI({
     dot <- paste("sync-dot", rv$sync_status)
@@ -398,7 +398,7 @@ server <- function(input, output, session) {
     })
     rv$syncing <- FALSE
   }, ignoreInit = TRUE)
-
+  
   # ── Nav tabs ─────────────────────────────────────────────────
   output$nav_tabs <- renderUI({
     abas <- list(
@@ -412,7 +412,7 @@ server <- function(input, output, session) {
           onclick = sprintf("Shiny.setInputValue('btn_aba','%s',{priority:'event'})", a$id),
           a$lbl)))
   })
-
+  
   # ── Filter bar ───────────────────────────────────────────────
   # Renderizado UMA vez; visibilidade controlada por JS + updateSelectInput.
   output$filter_bar <- renderUI({
@@ -443,12 +443,12 @@ server <- function(input, output, session) {
                       selected = meses_cart[1], width = "160px"))
     )
   })
-
+  
   # Mostrar/ocultar fbar via JS sem recriar inputs
   observeEvent(rv$aba, {
     session$sendCustomMessage("toggle_fbar", list(aba = rv$aba))
   }, ignoreInit = TRUE)
-
+  
   # Atualizar mes e imovel quando proprietario muda
   observeEvent(input$prop_sel, {
     req(input$prop_sel)
@@ -464,23 +464,23 @@ server <- function(input, output, session) {
     updateSelectInput(session, "mes_sel", choices = meses_lbl, selected = meses[1])
     updateSelectInput(session, "imovel",  choices = imoveis,   selected = "all")
   }, ignoreInit = FALSE)
-
+  
   output$alerta_erro <- renderUI({
     msg <- attr(rv$app_data, "erro_msg")
     if (!is.null(msg)) div(class = "erro-dados", tags$b("⚠ Atenção: "), msg)
   })
-
+  
   # ── Body roteamento ──────────────────────────────────────────
   output$body_master <- renderUI({
     if (length(rv$app_data) == 0)
       return(div(class = "empty-state", h3("⏳ Carregando dados..."),
                  p("Aguarde a sincronização com o Google Drive.")))
     switch(rv$aba,
-      "proprietario" = uiOutput("body_proprietario"),
-      "carteira"     = uiOutput("body_carteira"),
-      "insights"     = uiOutput("body_insights"))
+           "proprietario" = uiOutput("body_proprietario"),
+           "carteira"     = uiOutput("body_carteira"),
+           "insights"     = uiOutput("body_insights"))
   })
-
+  
   # ═══════════════════════════════════════════════════════════
   # REACTIVES — ABA PROPRIETÁRIO
   # ═══════════════════════════════════════════════════════════
@@ -488,7 +488,7 @@ server <- function(input, output, session) {
     req(input$prop_sel, rv$aba == "proprietario")
     rv$app_data[[input$prop_sel]]
   })
-
+  
   rec_fil <- reactive({
     d <- dados(); req(d)
     df <- d$receitas
@@ -496,7 +496,7 @@ server <- function(input, output, session) {
       df <- dplyr::filter(df, imovel == input$imovel)
     df
   })
-
+  
   rm_mes <- reactive({
     req(input$mes_sel)
     rec_fil() |> dplyr::filter(competencia == input$mes_sel) |>
@@ -509,7 +509,7 @@ server <- function(input, output, session) {
         diaria_media  = mean(diaria_media, na.rm = TRUE),
         n_diarias     = sum(n_diarias,     na.rm = TRUE))
   })
-
+  
   reservas_fil <- reactive({
     d <- dados(); req(d, input$mes_sel)
     if (is.null(d$reservas) || nrow(d$reservas) == 0) return(data.frame())
@@ -518,7 +518,7 @@ server <- function(input, output, session) {
       df <- dplyr::filter(df, imovel_nome == input$imovel)
     dplyr::arrange(df, checkin)
   })
-
+  
   despesas_fil <- reactive({
     d <- dados(); req(d, input$mes_sel)
     if (is.null(d$despesas) || nrow(d$despesas) == 0) return(data.frame())
@@ -527,7 +527,7 @@ server <- function(input, output, session) {
       df <- dplyr::filter(df, imovel_nome == input$imovel)
     df
   })
-
+  
   reposicao_fil <- reactive({
     d <- dados(); req(d, input$mes_sel)
     if (is.null(d$reposicao) || nrow(d$reposicao) == 0) return(data.frame())
@@ -536,7 +536,7 @@ server <- function(input, output, session) {
       df <- dplyr::filter(df, imovel_nome == input$imovel)
     df
   })
-
+  
   manutencao_fil <- reactive({
     d <- dados(); req(d, input$mes_sel)
     if (is.null(d$manutencao) || nrow(d$manutencao) == 0) return(data.frame())
@@ -545,7 +545,7 @@ server <- function(input, output, session) {
       df <- dplyr::filter(df, imovel_nome == input$imovel)
     df
   })
-
+  
   # ═══════════════════════════════════════════════════════════
   # ABA 1 — POR PROPRIETÁRIO
   # ═══════════════════════════════════════════════════════════
@@ -553,9 +553,9 @@ server <- function(input, output, session) {
     d <- dados(); req(d, input$mes_sel)
     m  <- isolate(rm_mes())
     mes_lbl    <- { dt <- suppressWarnings(as.Date(paste0(input$mes_sel,"-01")))
-                    if (!is.na(dt)) fmt_mes_pt(dt) else input$mes_sel }
+    if (!is.na(dt)) fmt_mes_pt(dt) else input$mes_sel }
     mes_badge  <- { dt <- suppressWarnings(as.Date(paste0(input$mes_sel,"-01")))
-                    if (!is.na(dt)) fmt_mes_pt(dt, abreviado = TRUE) else input$mes_sel }
+    if (!is.na(dt)) fmt_mes_pt(dt, abreviado = TRUE) else input$mes_sel }
     tagList(
       div(class = "sec", "RESULTADOS DO MÊS", div(class = "sec-badge", mes_lbl)),
       div(class = "kgrid",
@@ -565,14 +565,14 @@ server <- function(input, output, session) {
           kcard("Resultado Líq.", s_brl(m$resultado_liq), "após todas as deduções", vg = TRUE),
           kcard("Ocupação", paste0(round(m$ocupacao), "%"),
                 paste0("Diária média: ", s_brl(m$diaria_media)))),
-
+      
       div(class = "sec", "PORTFÓLIO DE IMÓVEIS",
           div(class = "sec-badge", paste(length(d$imoveis_ids), "imóveis"))),
       uiOutput("portfolio_cards"),
-
+      
       uiOutput("sec_analise_receita"),
       uiOutput("sec_detalhamento_mes"),
-
+      
       div(class = "sec", "RESULTADO FINANCEIRO"),
       div(class = "cgrid",
           div(class = "card",
@@ -588,7 +588,7 @@ server <- function(input, output, session) {
               div(class = "card-hdr", div(class = "card-ttl", "Ranking de Imóveis"),
                   span(class = "badge", "Receita no mês")),
               uiOutput("ranking"))),
-
+      
       div(class = "sec", "ANÁLISE DA DIÁRIA ENTRE CHECK-INS"),
       shinycssloaders::withSpinner(uiOutput("kpis_diaria"), type=4, color="#1a6ef7"),
       div(class = "cgrid",
@@ -601,18 +601,18 @@ server <- function(input, output, session) {
               div(class = "card-hdr", div(class = "card-ttl", "Intervalos entre Check-ins"),
                   span(class = "badge badge-blue", mes_badge)),
               uiOutput("lista_diarias"))),
-
+      
       div(class = "sec", "OPERACIONAL"),
       div(class = "card",
           div(class = "op-tabs",
               tags$button(class = paste("op-tab", if (rv$op_aba=="despesas") "active" else ""),
-                onclick="Shiny.setInputValue('btn_aba_op','despesas',{priority:'event'})", "💰 Despesas"),
+                          onclick="Shiny.setInputValue('btn_aba_op','despesas',{priority:'event'})", "💰 Despesas"),
               tags$button(class = paste("op-tab", if (rv$op_aba=="custos") "active" else ""),
-                onclick="Shiny.setInputValue('btn_aba_op','custos',{priority:'event'})", "🏠 Custos por Apartamento"),
+                          onclick="Shiny.setInputValue('btn_aba_op','custos',{priority:'event'})", "🏠 Custos por Apartamento"),
               tags$button(class = paste("op-tab", if (rv$op_aba=="os") "active" else ""),
-                onclick="Shiny.setInputValue('btn_aba_op','os',{priority:'event'})", "🔧 Ordens de Serviço")),
+                          onclick="Shiny.setInputValue('btn_aba_op','os',{priority:'event'})", "🔧 Ordens de Serviço")),
           uiOutput("painel_operacional")),
-
+      
       div(class = "sec", "ANÁLISE TEMPORAL"),
       div(class = "cgrid",
           div(class = "card",
@@ -623,19 +623,19 @@ server <- function(input, output, session) {
               div(class = "card-hdr", div(class = "card-ttl", "Evolução de Receita e Resultado"),
                   span(class = "badge", "Todos os meses")),
               shinycssloaders::withSpinner(plotlyOutput("g_evolucao", height="200px"), type=4, color="#00c49a"))),
-
+      
       div(class = "sec", "VISÃO GERAL DA CARTEIRA"),
       div(class = "card",
           div(class = "card-hdr", div(class = "card-ttl", "Acumulado do Ano"),
               span(class = "badge", "Acumulado até o período")),
           uiOutput("acumulado")),
-
+      
       div(class = "sec", "HISTÓRICO DETALHADO"),
       div(class = "card",
           shinycssloaders::withSpinner(DTOutput("t_historico"), type=4, color="#00c49a"))
     )
   })
-
+  
   # ── Portfolio cards ──────────────────────────────────────────
   output$portfolio_cards <- renderUI({
     d <- dados(); req(d, input$mes_sel)
@@ -656,7 +656,7 @@ server <- function(input, output, session) {
                   if (!is.null(r)) div(class="icard-m",   paste0(s_brl_compact(r$diaria_media),"/noite")) else NULL))
         }))
   })
-
+  
   # ── Análise receita (gráfico diária/dia) ────────────────────
   output$sec_analise_receita <- renderUI({
     d <- dados(); req(d, input$mes_sel)
@@ -690,7 +690,7 @@ server <- function(input, output, session) {
              yaxis=list(showgrid=TRUE,gridcolor="#f3f6f9",zeroline=FALSE,tickprefix="R$ ",tickfont=list(size=10),title=""),
              margin=list(l=55,r=12,t=8,b=32),showlegend=FALSE) |> config(displayModeBar=FALSE)
   })
-
+  
   # ── Detalhamento do mês (calendário) ────────────────────────
   output$sec_detalhamento_mes <- renderUI({
     d <- dados(); req(d, input$mes_sel)
@@ -733,7 +733,7 @@ server <- function(input, output, session) {
     })
     div(class="cg",!!!c(hdrs,vazios,dias))
   })
-
+  
   # ── Resultado financeiro ────────────────────────────────────
   output$resultado <- renderUI({
     m <- rm_mes()
@@ -745,7 +745,7 @@ server <- function(input, output, session) {
           span("RESULTADO LÍQUIDO"),
           span(class="fv g", s_brl(m$resultado_liq))))
   })
-
+  
   # ── Tabela custos ─────────────────────────────────────────────
   output$t_custos <- renderDT({
     d <- dados(); req(d, input$mes_sel)
@@ -756,7 +756,7 @@ server <- function(input, output, session) {
     datatable(linhas, options=list(dom="t",paging=FALSE,ordering=FALSE),
               rownames=FALSE, class="compact stripe")
   }, server=FALSE)
-
+  
   # ── Ranking ──────────────────────────────────────────────────
   output$ranking <- renderUI({
     d <- dados(); req(d, input$mes_sel)
@@ -776,7 +776,7 @@ server <- function(input, output, session) {
     })
     div(!!!items)
   })
-
+  
   # ── KPIs diária ───────────────────────────────────────────────
   output$kpis_diaria <- renderUI({
     df <- reservas_fil()
@@ -795,7 +795,7 @@ server <- function(input, output, session) {
         kcard_sm("Ticket Médio/Res.", s_brl(ticket),         "blue"),
         kcard_sm("Nº de Reservas",    as.character(nrow(df)), "orange"))
   })
-
+  
   # ── Gráfico diária por reserva ────────────────────────────────
   output$g_diaria_reservas <- renderPlotly({
     df <- reservas_fil()
@@ -822,7 +822,7 @@ server <- function(input, output, session) {
              legend=list(x=0,y=1.12,orientation="h",font=list(size=10))) |>
       config(displayModeBar=FALSE)
   })
-
+  
   # ── Lista diárias ─────────────────────────────────────────────
   output$lista_diarias <- renderUI({
     df <- reservas_fil()
@@ -836,7 +836,7 @@ server <- function(input, output, session) {
       noites <- as.integer(as.Date(r$checkout)-as.Date(r$checkin))
       pct_w  <- round(r$diaria_liquida/d_max*100)
       bcls   <- if(r$diaria_liquida>=p75) "diaria-badge db-alto"
-                else if(r$diaria_liquida>=p25) "diaria-badge db-medio" else "diaria-badge db-baixo"
+      else if(r$diaria_liquida>=p25) "diaria-badge db-medio" else "diaria-badge db-baixo"
       btxt   <- if(r$diaria_liquida>=p75) "ALTO" else if(r$diaria_liquida>=p25) "MED" else "BAIXO"
       div(class="diaria-row",
           div(class="diaria-datas",tags$b(format(as.Date(r$checkin),"%d/%m"))," → ",
@@ -848,7 +848,7 @@ server <- function(input, output, session) {
     })
     div(!!!items)
   })
-
+  
   # ── Painel operacional ────────────────────────────────────────
   output$painel_operacional <- renderUI({
     if (rv$op_aba=="despesas") {
@@ -868,7 +868,7 @@ server <- function(input, output, session) {
                 span(class="badge badge-orange","Mês selecionado")),
             div(class="tab-wrap",
                 shinycssloaders::withSpinner(DTOutput("t_despesas"),type=4,color="#d97706"))))
-
+      
     } else if (rv$op_aba=="custos") {
       tagList(
         shinycssloaders::withSpinner(uiOutput("kpis_custos"),type=4,color="#7c3aed"),
@@ -881,7 +881,7 @@ server <- function(input, output, session) {
                 span(class="badge badge-purple","Mês selecionado")),
             div(class="tab-wrap",
                 shinycssloaders::withSpinner(DTOutput("t_custos_apto"),type=4,color="#7c3aed"))))
-
+      
     } else {
       tagList(
         shinycssloaders::withSpinner(uiOutput("kpis_os"),type=4,color="#0052cc"),
@@ -892,7 +892,7 @@ server <- function(input, output, session) {
                 shinycssloaders::withSpinner(DTOutput("t_os"),type=4,color="#0052cc"))))
     }
   })
-
+  
   output$kpis_despesas <- renderUI({
     des <- despesas_fil(); rep <- reposicao_fil()
     total_des <- if(nrow(des)>0) sum(des$valor,na.rm=TRUE) else 0
@@ -942,13 +942,13 @@ server <- function(input, output, session) {
     cols_ok   <- cols_base[cols_base%in%names(des)]
     df <- des|>dplyr::select(dplyr::all_of(cols_ok))|>
       dplyr::rename_with(~dplyr::recode(.,imovel_nome="Imóvel",categoria="Categoria",
-        descricao="Descrição",data="Data",competencia="Competência",valor="Valor (R$)"))|>
+                                        descricao="Descrição",data="Data",competencia="Competência",valor="Valor (R$)"))|>
       dplyr::mutate(dplyr::across(dplyr::any_of("Valor (R$)"),~brl(.x)))
     datatable(df,options=list(pageLength=10,dom="ftip",
-      language=list(search="Buscar:",paginate=list(previous="Ant.",`next`="Próx."))),
-      rownames=FALSE,class="compact stripe hover",escape=FALSE)
+                              language=list(search="Buscar:",paginate=list(previous="Ant.",`next`="Próx."))),
+              rownames=FALSE,class="compact stripe hover",escape=FALSE)
   },server=FALSE)
-
+  
   output$kpis_custos <- renderUI({
     d <- dados(); req(d,input$mes_sel)
     rec <- rec_fil()|>dplyr::filter(competencia==input$mes_sel)
@@ -999,7 +999,7 @@ server <- function(input, output, session) {
         `Resultado`       = brl(resultado_liq))
     datatable(rec,options=list(dom="t",paging=FALSE,ordering=FALSE),rownames=FALSE,class="compact stripe")
   },server=FALSE)
-
+  
   output$kpis_os <- renderUI({
     man <- manutencao_fil()
     if(nrow(man)==0) return(p(class="sem-dados","Sem ordens de serviço para o período."))
@@ -1019,13 +1019,13 @@ server <- function(input, output, session) {
     cols_ok   <- cols_base[cols_base%in%names(man)]
     df <- man|>dplyr::select(dplyr::all_of(cols_ok))|>
       dplyr::rename_with(~dplyr::recode(.,imovel_nome="Imóvel",os_id="OS ID",
-        produto_servico="Serviço",valor_total="Valor (R$)",competencia="Competência",data="Data"))|>
+                                        produto_servico="Serviço",valor_total="Valor (R$)",competencia="Competência",data="Data"))|>
       dplyr::mutate(dplyr::across(dplyr::any_of("Valor (R$)"),~brl(.x)))
     datatable(df,options=list(pageLength=10,dom="ftip",
-      language=list(search="Buscar:",paginate=list(previous="Ant.",`next`="Próx."))),
-      rownames=FALSE,class="compact stripe hover")
+                              language=list(search="Buscar:",paginate=list(previous="Ant.",`next`="Próx."))),
+              rownames=FALSE,class="compact stripe hover")
   },server=FALSE)
-
+  
   # ── Gráficos temporais ────────────────────────────────────────
   output$g_diarias <- renderPlotly({
     d <- dados(); req(d,input$mes_sel)
@@ -1048,8 +1048,9 @@ server <- function(input, output, session) {
   output$g_evolucao <- renderPlotly({
     df <- rec_fil()|>dplyr::group_by(mes,mes_label)|>
       dplyr::summarise(receita=sum(receita_bruta,na.rm=TRUE),resultado=sum(resultado_liq,na.rm=TRUE),.groups="drop")|>
-      dplyr::arrange(mes)
+      dplyr::arrange(as.Date(mes))
     validate(need(nrow(df)>0,"Sem dados."))
+    ordem_labels <- df$mes_label
     n <- nrow(df); cores <- c(rep("#c5d8f7",max(n-1,0)),"#1a6ef7")[1:n]
     plot_ly(df,x=~mes_label,y=~receita,type="bar",
             marker=list(color=cores,line=list(color="transparent")),name="Receita Bruta",
@@ -1059,13 +1060,14 @@ server <- function(input, output, session) {
                 name="Resultado Líq.",yaxis="y2",
                 hovertemplate="%{x}<br>Resultado: R$ %{y:,.0f}<extra></extra>")|>
       layout(paper_bgcolor="transparent",plot_bgcolor="transparent",
-             xaxis=list(showgrid=FALSE,zeroline=FALSE,tickfont=list(size=10),title=""),
+             xaxis=list(showgrid=FALSE,zeroline=FALSE,tickfont=list(size=10),title="",
+                        categoryorder="array",categoryarray=ordem_labels),
              yaxis=list(showgrid=TRUE,gridcolor="#f0f4f8",zeroline=FALSE,tickprefix="R$ ",tickfont=list(size=10),title=""),
              yaxis2=list(overlaying="y",side="right",showgrid=FALSE,zeroline=FALSE,tickprefix="R$ ",tickfont=list(size=9),title=""),
              margin=list(l=52,r=52,t=8,b=30),
              legend=list(x=0,y=1.15,orientation="h",font=list(size=10)))|>config(displayModeBar=FALSE)
   })
-
+  
   # ── Acumulado ─────────────────────────────────────────────────
   output$acumulado <- renderUI({
     acum <- rec_fil()|>dplyr::summarise(rec=sum(receita_bruta,na.rm=TRUE),res=sum(resultado_liq,na.rm=TRUE))
@@ -1087,7 +1089,7 @@ server <- function(input, output, session) {
              yaxis=list(showgrid=FALSE,zeroline=FALSE,showticklabels=FALSE,title=""),
              margin=list(l=0,r=0,t=0,b=0),showlegend=FALSE)|>config(displayModeBar=FALSE)
   })
-
+  
   # ── Histórico ─────────────────────────────────────────────────
   output$t_historico <- renderDT({
     df <- rec_fil()|>dplyr::arrange(dplyr::desc(mes))|>
@@ -1102,22 +1104,22 @@ server <- function(input, output, session) {
         `Diária Média`  = brl(diaria_media),
         `Nº Diárias`    = n_diarias)
     datatable(df,options=list(pageLength=12,dom="frtip",
-      language=list(search="Buscar:",info="Mostrando _START_ a _END_ de _TOTAL_",
-                    paginate=list(previous="Anterior",`next`="Próximo"))),
-      rownames=FALSE,class="compact stripe hover")
+                              language=list(search="Buscar:",info="Mostrando _START_ a _END_ de _TOTAL_",
+                                            paginate=list(previous="Anterior",`next`="Próximo"))),
+              rownames=FALSE,class="compact stripe hover")
   },server=FALSE)
-
+  
   # ═══════════════════════════════════════════════════════════
   # ABA 2 — VISÃO DA CARTEIRA
   # ═══════════════════════════════════════════════════════════
   output$body_carteira <- renderUI({
     req(input$mes_cart)
     mes_lbl <- { dt <- suppressWarnings(as.Date(paste0(input$mes_cart,"-01")))
-                 if(!is.na(dt)) fmt_mes_pt(dt) else input$mes_cart }
+    if(!is.na(dt)) fmt_mes_pt(dt) else input$mes_cart }
     tagList(
       div(class="sec","VISÃO CONSOLIDADA DA CARTEIRA",div(class="sec-badge",mes_lbl)),
       shinycssloaders::withSpinner(uiOutput("kpis_carteira"),type=4,color="#1a6ef7"),
-
+      
       div(class="sec","RANKING DE PROPRIETÁRIOS"),
       div(class="cgrid",
           div(class="card",
@@ -1128,7 +1130,7 @@ server <- function(input, output, session) {
               div(class="card-hdr",div(class="card-ttl","Ocupação por Proprietário"),
                   span(class="badge badge-green","Taxa média")),
               shinycssloaders::withSpinner(plotlyOutput("g_ocupacao_prop",height="300px"),type=4,color="#00b388"))),
-
+      
       div(class="sec","RANKING DE IMÓVEIS",div(class="sec-badge","Top performers")),
       div(class="cgrid",
           div(class="card",
@@ -1139,13 +1141,13 @@ server <- function(input, output, session) {
               div(class="card-hdr",div(class="card-ttl","Top 10 — Maior Diária Média"),
                   span(class="badge badge-purple","No mês")),
               uiOutput("ranking_imoveis_diaria"))),
-
+      
       div(class="sec","EVOLUÇÃO DA CARTEIRA"),
       div(class="card",
           div(class="card-hdr",div(class="card-ttl","Receita Total por Mês — Todos os Proprietários"),
               span(class="badge","Visão consolidada")),
           shinycssloaders::withSpinner(plotlyOutput("g_evolucao_carteira",height="260px"),type=4,color="#1a6ef7")),
-
+      
       div(class="sec","COMPARATIVO DE OCUPAÇÃO"),
       div(class="cgrid",
           div(class="card",
@@ -1156,13 +1158,13 @@ server <- function(input, output, session) {
               div(class="card-hdr",div(class="card-ttl","Receita × Resultado"),
                   span(class="badge badge-green","Por imóvel")),
               shinycssloaders::withSpinner(plotlyOutput("g_scatter_rec_res",height="240px"),type=4,color="#00b388"))),
-
+      
       div(class="sec","TABELA COMPLETA DA CARTEIRA"),
       div(class="card",
           shinycssloaders::withSpinner(DTOutput("t_carteira"),type=4,color="#1a6ef7"))
     )
   })
-
+  
   output$kpis_carteira <- renderUI({
     req(input$mes_cart)
     flat <- build_carteira_flat(rv$app_data)
@@ -1179,7 +1181,7 @@ server <- function(input, output, session) {
         kcard("Proprietários",   as.character(length(unique(mes$proprietario))),
               paste(length(unique(mes$imovel)),"imóveis ativos")))
   })
-
+  
   output$ranking_proprietarios <- renderUI({
     req(input$mes_cart)
     flat <- build_carteira_flat(rv$app_data)
@@ -1198,7 +1200,7 @@ server <- function(input, output, session) {
     })
     div(!!!items)
   })
-
+  
   output$g_ocupacao_prop <- renderPlotly({
     req(input$mes_cart)
     flat <- build_carteira_flat(rv$app_data)
@@ -1215,7 +1217,7 @@ server <- function(input, output, session) {
              yaxis=list(showgrid=FALSE,zeroline=FALSE,tickfont=list(size=10),title=""),
              margin=list(l=10,r=12,t=8,b=20),showlegend=FALSE)|>config(displayModeBar=FALSE)
   })
-
+  
   output$ranking_imoveis_receita <- renderUI({
     req(input$mes_cart)
     flat <- build_carteira_flat(rv$app_data)
@@ -1232,7 +1234,7 @@ server <- function(input, output, session) {
     })
     div(!!!items)
   })
-
+  
   output$ranking_imoveis_diaria <- renderUI({
     req(input$mes_cart)
     flat <- build_carteira_flat(rv$app_data)
@@ -1249,14 +1251,15 @@ server <- function(input, output, session) {
     })
     div(!!!items)
   })
-
+  
   output$g_evolucao_carteira <- renderPlotly({
     flat <- build_carteira_flat(rv$app_data)
     if(nrow(flat)==0) validate(need(FALSE,"Sem dados."))
     df <- flat|>dplyr::group_by(mes,mes_label)|>
       dplyr::summarise(receita=sum(receita_bruta,na.rm=TRUE),resultado=sum(resultado_liq,na.rm=TRUE),.groups="drop")|>
-      dplyr::arrange(mes)
+      dplyr::arrange(as.Date(mes))
     validate(need(nrow(df)>0,"Sem dados."))
+    ordem_labels <- df$mes_label
     n <- nrow(df)
     cores <- grDevices::colorRampPalette(c("#c5d8f7","#1a6ef7"))(n)
     plot_ly(df,x=~mes_label,y=~receita,type="bar",
@@ -1266,13 +1269,14 @@ server <- function(input, output, session) {
                 line=list(color="#00b388",width=2.5),marker=list(color="#00b388",size=7),
                 name="Resultado",yaxis="y2",hovertemplate="%{x}<br>R$ %{y:,.0f}<extra></extra>")|>
       layout(paper_bgcolor="transparent",plot_bgcolor="transparent",
-             xaxis=list(showgrid=FALSE,zeroline=FALSE,tickfont=list(size=10),title=""),
+             xaxis=list(showgrid=FALSE,zeroline=FALSE,tickfont=list(size=10),title="",
+                        categoryorder="array",categoryarray=ordem_labels),
              yaxis=list(showgrid=TRUE,gridcolor="#f3f6f9",zeroline=FALSE,tickprefix="R$ ",tickfont=list(size=10),title=""),
              yaxis2=list(overlaying="y",side="right",showgrid=FALSE,zeroline=FALSE,tickprefix="R$ ",tickfont=list(size=9),title=""),
              margin=list(l=55,r=55,t=8,b=30),
              legend=list(x=0,y=1.12,orientation="h",font=list(size=10)))|>config(displayModeBar=FALSE)
   })
-
+  
   output$g_dist_ocupacao <- renderPlotly({
     req(input$mes_cart)
     flat <- build_carteira_flat(rv$app_data)
@@ -1286,7 +1290,7 @@ server <- function(input, output, session) {
              yaxis=list(showgrid=TRUE,gridcolor="#f3f6f9",zeroline=FALSE,tickfont=list(size=10),title="Nº de imóveis"),
              margin=list(l=45,r=12,t=8,b=40),showlegend=FALSE)|>config(displayModeBar=FALSE)
   })
-
+  
   output$g_scatter_rec_res <- renderPlotly({
     req(input$mes_cart)
     flat <- build_carteira_flat(rv$app_data)
@@ -1302,7 +1306,7 @@ server <- function(input, output, session) {
              yaxis=list(showgrid=TRUE,gridcolor="#f3f6f9",zeroline=TRUE,zerolinecolor="#e5e9ef",tickprefix="R$ ",tickfont=list(size=10),title="Resultado Líq."),
              margin=list(l=55,r=20,t=8,b=45),showlegend=FALSE)|>config(displayModeBar=FALSE)
   })
-
+  
   output$t_carteira <- renderDT({
     req(input$mes_cart)
     flat <- build_carteira_flat(rv$app_data)
@@ -1319,11 +1323,11 @@ server <- function(input, output, session) {
         `Diária Média` = brl(diaria_media),
         `Nº Diárias`   = n_diarias)
     datatable(df,options=list(pageLength=20,dom="frtip",
-      language=list(search="Buscar:",info="Mostrando _START_ a _END_ de _TOTAL_",
-                    paginate=list(previous="Anterior",`next`="Próximo"))),
-      rownames=FALSE,class="compact stripe hover")
+                              language=list(search="Buscar:",info="Mostrando _START_ a _END_ de _TOTAL_",
+                                            paginate=list(previous="Anterior",`next`="Próximo"))),
+              rownames=FALSE,class="compact stripe hover")
   },server=FALSE)
-
+  
   # ═══════════════════════════════════════════════════════════
   # ABA 3 — INSIGHTS & PROPOSTA DE VALOR
   # ═══════════════════════════════════════════════════════════
@@ -1331,10 +1335,10 @@ server <- function(input, output, session) {
     tagList(
       div(class="sec","DIAGNÓSTICO AUTOMÁTICO DA CARTEIRA"),
       shinycssloaders::withSpinner(uiOutput("insights_auto"),type=4,color="#1a6ef7"),
-
+      
       div(class="sec","OPORTUNIDADES IDENTIFICADAS"),
       shinycssloaders::withSpinner(uiOutput("oportunidades"),type=4,color="#d97706"),
-
+      
       div(class="sec","PROPOSTA DE VALOR BSBStay",div(class="sec-badge","Para apresentar ao proprietário")),
       div(class="pv-grid",
           div(class="pv-card",div(class="pv-icon","📈"),div(class="pv-title","Maximização de Receita"),
@@ -1355,7 +1359,7 @@ server <- function(input, output, session) {
           div(class="pv-card",div(class="pv-icon","🌟"),div(class="pv-title","Resultado Líquido"),
               div(class="pv-body","Foco em resultado líquido — não apenas receita. Gerenciamos a equação completa."),
               shinycssloaders::withSpinner(uiOutput("pv_metric_resultado"),type=4,color="#00b388"))),
-
+      
       div(class="sec","BENCHMARK — IMÓVEL VS. MÉDIA DA CARTEIRA"),
       div(class="card",
           div(class="card-hdr",div(class="card-ttl","Selecione um imóvel para comparar"),
@@ -1369,7 +1373,7 @@ server <- function(input, output, session) {
       shinycssloaders::withSpinner(uiOutput("sec_benchmark_graficos"),type=4,color="#7c3aed")
     )
   })
-
+  
   output$insights_auto <- renderUI({
     flat <- build_carteira_flat(rv$app_data)
     if(nrow(flat)==0) return(p(class="sem-dados","Sem dados."))
@@ -1388,25 +1392,25 @@ server <- function(input, output, session) {
     margem <- if(rec>0) res/rec*100 else 0
     div(class="insights-grid",
         insight_card("📊",paste0("Carteira ativa: ",nrow(mes)," imóveis"),
-          paste0("Ocupação média de ",round(ocp,1),"% e diária média de ",s_brl(dar)," no último período."),
-          if(ocp>=65)"green" else if(ocp>=45)"blue" else "orange"),
+                     paste0("Ocupação média de ",round(ocp,1),"% e diária média de ",s_brl(dar)," no último período."),
+                     if(ocp>=65)"green" else if(ocp>=45)"blue" else "orange"),
         insight_card("🏆",paste0("Top performer: ",top$imovel),
-          paste0("Maior receita: ",s_brl_compact(top$receita_bruta)," com ",round(top$ocupacao),"% ocupação."),"blue"),
+                     paste0("Maior receita: ",s_brl_compact(top$receita_bruta)," com ",round(top$ocupacao),"% ocupação."),"blue"),
         insight_card(if(custo_r>30)"⚠️" else "✅",paste0("Custo/Receita: ",round(custo_r,1),"%"),
-          paste0("Custos representam ",round(custo_r,1),"% da receita bruta. ",
-                 if(custo_r>30)"Avaliar oportunidades de redução." else "Índice saudável."),
-          if(custo_r>30)"orange" else "green"),
+                     paste0("Custos representam ",round(custo_r,1),"% da receita bruta. ",
+                            if(custo_r>30)"Avaliar oportunidades de redução." else "Índice saudável."),
+                     if(custo_r>30)"orange" else "green"),
         insight_card(if(ab50>0)"⚠️" else "✅",paste0(ab50," imóvel(is) com ocupação < 50%"),
-          if(ab50>0) paste0("'",bot$imovel,"' teve apenas ",round(bot$ocupacao),"% de ocupação. Revisar precificação.")
-          else "Todos os imóveis acima de 50% de ocupação no período.",
-          if(ab50>0)"orange" else "green"),
+                     if(ab50>0) paste0("'",bot$imovel,"' teve apenas ",round(bot$ocupacao),"% de ocupação. Revisar precificação.")
+                     else "Todos os imóveis acima de 50% de ocupação no período.",
+                     if(ab50>0)"orange" else "green"),
         insight_card("💎",paste0("Diária premium: ",prem$imovel),
-          paste0("Maior diária: ",s_brl(prem$diaria_media)," — ",round(prem$ocupacao),"% de ocupação."),"purple"),
+                     paste0("Maior diária: ",s_brl(prem$diaria_media)," — ",round(prem$ocupacao),"% de ocupação."),"purple"),
         insight_card("💵",paste0("Resultado total: ",s_brl_compact(res)),
-          paste0("Receita de ",s_brl_compact(rec)," com margem líquida de ",round(margem,1),"%."),
-          if(margem>60)"green" else if(margem>40)"blue" else "red"))
+                     paste0("Receita de ",s_brl_compact(rec)," com margem líquida de ",round(margem,1),"%."),
+                     if(margem>60)"green" else if(margem>40)"blue" else "red"))
   })
-
+  
   output$oportunidades <- renderUI({
     flat <- build_carteira_flat(rv$app_data)
     if(nrow(flat)==0) return(p(class="sem-dados","Sem dados."))
@@ -1419,29 +1423,29 @@ server <- function(input, output, session) {
     if(nrow(abaixo)>0) for(i in seq_len(min(nrow(abaixo),3))){
       r <- abaixo[i,]
       alertas <- c(alertas,list(div(class="alert-row alert-warn",div(class="alert-icon","⚠️"),
-        div(tags$b(r$imovel)," — Ocupação abaixo da média: ",tags$b(paste0(round(r$ocupacao),"%")),
-            " vs. média ",tags$b(paste0(round(ocp_m),"%")),". Sugestão: revisar preço ou ampliar canais."))))
+                                    div(tags$b(r$imovel)," — Ocupação abaixo da média: ",tags$b(paste0(round(r$ocupacao),"%")),
+                                        " vs. média ",tags$b(paste0(round(ocp_m),"%")),". Sugestão: revisar preço ou ampliar canais."))))
     }
     precif <- mes|>dplyr::filter(diaria_media>dar_m*1.3,ocupacao<ocp_m*.7)
     if(nrow(precif)>0) for(i in seq_len(min(nrow(precif),2))){
       r <- precif[i,]
       alertas <- c(alertas,list(div(class="alert-row alert-warn",div(class="alert-icon","💡"),
-        div(tags$b(r$imovel)," — Diária alta (",s_brl(r$diaria_media),") mas ocupação baixa (",
-            round(r$ocupacao),"%). Possível precificação fora do mercado."))))
+                                    div(tags$b(r$imovel)," — Diária alta (",s_brl(r$diaria_media),") mas ocupação baixa (",
+                                        round(r$ocupacao),"%). Possível precificação fora do mercado."))))
     }
     tops <- mes|>dplyr::filter(ocupacao>ocp_m*1.2,diaria_media>dar_m)|>dplyr::arrange(dplyr::desc(receita_bruta))
     if(nrow(tops)>0) for(i in seq_len(min(nrow(tops),2))){
       r <- tops[i,]
       alertas <- c(alertas,list(div(class="alert-row alert-ok",div(class="alert-icon","🌟"),
-        div(tags$b(r$imovel)," — Performance excelente: ",round(r$ocupacao),"% ocupação + diária ",
-            s_brl(r$diaria_media),". Bom caso para apresentar a novos proprietários."))))
+                                    div(tags$b(r$imovel)," — Performance excelente: ",round(r$ocupacao),"% ocupação + diária ",
+                                        s_brl(r$diaria_media),". Bom caso para apresentar a novos proprietários."))))
     }
     if(length(alertas)==0)
       alertas <- list(div(class="alert-row alert-ok",div(class="alert-icon","✅"),
-        div("Nenhuma oportunidade crítica identificada. Carteira com bom desempenho geral.")))
+                          div("Nenhuma oportunidade crítica identificada. Carteira com bom desempenho geral.")))
     div(!!!alertas)
   })
-
+  
   output$pv_metric_receita <- renderUI({
     flat <- build_carteira_flat(rv$app_data); if(nrow(flat)==0) return(NULL)
     div(class="pv-metric",paste0("📈 Total gerenciado: ",s_brl_compact(sum(flat$receita_bruta,na.rm=TRUE))))
@@ -1464,7 +1468,7 @@ server <- function(input, output, session) {
     rec <- sum(flat$receita_bruta,na.rm=TRUE); res <- sum(flat$resultado_liq,na.rm=TRUE)
     div(class="pv-metric",paste0("🌟 Margem líquida: ",if(rec>0) round(res/rec*100,1) else 0,"%"))
   })
-
+  
   output$benchmark_imovel <- renderUI({
     req(input$bench_imovel,nzchar(input$bench_imovel))
     flat <- build_carteira_flat(rv$app_data); if(nrow(flat)==0) return(NULL)
@@ -1474,8 +1478,8 @@ server <- function(input, output, session) {
     if(nrow(im_df)==0) return(p(class="sem-dados","Imóvel sem dados no período mais recente."))
     im  <- im_df[1,]
     med <- dplyr::summarise(mes_df,
-      rec=mean(receita_bruta,na.rm=TRUE),res=mean(resultado_liq,na.rm=TRUE),
-      ocp=mean(ocupacao,na.rm=TRUE),dar=mean(diaria_media,na.rm=TRUE))
+                            rec=mean(receita_bruta,na.rm=TRUE),res=mean(resultado_liq,na.rm=TRUE),
+                            ocp=mean(ocupacao,na.rm=TRUE),dar=mean(diaria_media,na.rm=TRUE))
     mk <- function(val,mval){
       diff <- val-mval; pct_d <- if(mval>0) diff/mval*100 else 0
       list(sinal=if(diff>=0)"▲ +" else "▼ ",pct=abs(round(pct_d,1)),cls=if(diff>=0)"fv g" else "fv r")
@@ -1495,7 +1499,7 @@ server <- function(input, output, session) {
                   paste0(mt$cp$sinal,mt$cp$pct,"% vs. média")))
         }))
   })
-
+  
   output$sec_benchmark_graficos <- renderUI({
     req(input$bench_imovel,nzchar(input$bench_imovel))
     div(class="cgrid",
@@ -1506,7 +1510,7 @@ server <- function(input, output, session) {
             div(class="card-hdr",div(class="card-ttl","Ocupação: Imóvel vs. Média"),span(class="badge badge-green","Evolução")),
             shinycssloaders::withSpinner(plotlyOutput("g_bench_ocupacao",height="220px"),type=4,color="#00b388")))
   })
-
+  
   output$g_bench_receita <- renderPlotly({
     req(input$bench_imovel,nzchar(input$bench_imovel))
     flat <- build_carteira_flat(rv$app_data); if(nrow(flat)==0) validate(need(FALSE,""))
@@ -1527,7 +1531,7 @@ server <- function(input, output, session) {
              margin=list(l=55,r=12,t=8,b=30),
              legend=list(x=0,y=1.15,orientation="h",font=list(size=10)))|>config(displayModeBar=FALSE)
   })
-
+  
   output$g_bench_ocupacao <- renderPlotly({
     req(input$bench_imovel,nzchar(input$bench_imovel))
     flat <- build_carteira_flat(rv$app_data); if(nrow(flat)==0) validate(need(FALSE,""))
@@ -1548,7 +1552,7 @@ server <- function(input, output, session) {
              margin=list(l=45,r=12,t=8,b=30),
              legend=list(x=0,y=1.15,orientation="h",font=list(size=10)))|>config(displayModeBar=FALSE)
   })
-
+  
 } # fim server
 
 shinyApp(ui, server)

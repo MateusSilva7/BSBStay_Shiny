@@ -344,7 +344,7 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
 # ═══════════════════════════════════════════════════════════════
 
 server <- function(input, output, session) {
-
+  
   rv <- reactiveValues(
     app_data    = tryCatch(
       carregar_dados_app(
@@ -363,7 +363,7 @@ server <- function(input, output, session) {
     },
     op_aba = "despesas"
   )
-
+  
   observeEvent(input$btn_aba_op, { rv$op_aba <- input$btn_aba_op }, ignoreInit = TRUE)
   
   # ── Reactives base ──────────────────────────────────────────
@@ -451,7 +451,7 @@ server <- function(input, output, session) {
   })
   
   # ── Sync ──────────────────────────────────────────────────────
-
+  
   # ── Sync ──────────────────────────────────────────────────────
   output$sync_bar <- renderUI({
     dot_class <- paste("sync-dot", rv$sync_status)
@@ -463,7 +463,7 @@ server <- function(input, output, session) {
                     onclick = "Shiny.setInputValue(\'btn_sync\', Math.random())",
                     if (rv$syncing) "\u23f3 Aguarde..." else "\u21bb Atualizar dados"))
   })
-
+  
   observeEvent(input$btn_sync, {
     rv$syncing <- TRUE
     tryCatch({
@@ -479,7 +479,7 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
   
   # ── Header prop ───────────────────────────────────────────────
-
+  
   # ── Header ────────────────────────────────────────────────────
   output$hdr_prop <- renderUI({
     d <- dados(); req(d)
@@ -496,7 +496,7 @@ server <- function(input, output, session) {
           "🔑 Alterar Senha")
     )
   })
-
+  
   # ── Filter bar ────────────────────────────────────────────────
   output$filter_bar <- renderUI({
     d <- dados(); req(d, length(meses_disponiveis()) > 0)
@@ -512,12 +512,12 @@ server <- function(input, output, session) {
         div(class = "fbar-lbl", "IM\u00d3VEL:"),
         selectInput("imovel",  NULL, choices = imoveis,   selected = "all",    width = "260px"))
   })
-
+  
   output$alerta_erro <- renderUI({
     msg <- attr(rv$app_data, "erro_msg")
     if (!is.null(msg)) div(class = "erro-dados", tags$b("\u26a0 Aten\u00e7\u00e3o: "), msg)
   })
-
+  
   output$body <- renderUI({
     d <- dados()
     if (is.null(d)) {
@@ -1018,7 +1018,7 @@ server <- function(input, output, session) {
       )
     }
   })
-
+  
   
   # ── KPIs Despesas ────────────────────────────────────────────
   output$kpis_despesas <- renderUI({
@@ -1257,12 +1257,12 @@ server <- function(input, output, session) {
   output$kpis_reposicao <- renderUI({
     rep <- reposicao_fil()
     if (nrow(rep) == 0) return(p(class = "sem-dados", "Sem itens de reposição para o período."))
-
+    
     total_val  <- sum(suppressWarnings(as.numeric(rep$valor_unitario_ou_total)), na.rm = TRUE)
     total_qtd  <- sum(suppressWarnings(as.numeric(rep$quantidade)), na.rm = TRUE)
     n_itens    <- nrow(rep)
     n_aptos    <- if ("apto_original" %in% names(rep)) length(unique(rep$apto_original)) else
-                  if ("imovel_nome"   %in% names(rep)) length(unique(rep$imovel_nome))   else "—"
+      if ("imovel_nome"   %in% names(rep)) length(unique(rep$imovel_nome))   else "—"
     item_freq  <- if ("item_limpo" %in% names(rep)) {
       tc <- sort(table(rep$item_limpo), decreasing = TRUE)
       if (length(tc) > 0) names(tc)[1] else "—"
@@ -1271,7 +1271,7 @@ server <- function(input, output, session) {
       if (length(tc) > 0) names(tc)[1] else "—"
     } else "—"
     ticket_med <- if (n_itens > 0) total_val / n_itens else 0
-
+    
     div(class = "kgrid-sm",
         kcard_sm("Total Reposição",   brl(total_val),               "teal"),
         kcard_sm("Qtd. Total",        as.character(round(total_qtd)), "blue"),
@@ -1280,29 +1280,29 @@ server <- function(input, output, session) {
         kcard_sm("Item Mais Reposto", item_freq,                    "red"),
         kcard_sm("Ticket Médio/Item", brl(ticket_med),              "teal"))
   })
-
+  
   # ── Tabela Reposição ──────────────────────────────────────────
   output$t_reposicao <- renderDT({
     rep <- reposicao_fil()
     validate(need(nrow(rep) > 0, "Sem itens de reposição para o período/imóvel selecionado."))
-
+    
     # Resolver coluna de imóvel
     apto_col <- if ("apto_original" %in% names(rep)) rep$apto_original
-                else if ("imovel_nome" %in% names(rep)) rep$imovel_nome
-                else if ("property_id" %in% names(rep)) rep$property_id
-                else rep("—", nrow(rep))
-
+    else if ("imovel_nome" %in% names(rep)) rep$imovel_nome
+    else if ("property_id" %in% names(rep)) rep$property_id
+    else rep("—", nrow(rep))
+    
     # Resolver coluna de item
     item_col <- if ("item_limpo" %in% names(rep)) rep$item_limpo
-                else if ("item_raw" %in% names(rep)) rep$item_raw
-                else rep("—", nrow(rep))
-
+    else if ("item_raw" %in% names(rep)) rep$item_raw
+    else rep("—", nrow(rep))
+    
     # Quantidade e valores
     qtd_col   <- suppressWarnings(as.numeric(if ("quantidade" %in% names(rep)) rep$quantidade else NA))
     val_col   <- suppressWarnings(as.numeric(rep$valor_unitario_ou_total))
     val_total <- ifelse(is.na(qtd_col) | qtd_col <= 0, val_col, qtd_col * val_col)
     max_val   <- max(val_total, na.rm = TRUE)
-
+    
     df <- data.frame(
       `Imóvel`      = as.character(apto_col),
       `Item`        = as.character(item_col),
@@ -1312,11 +1312,11 @@ server <- function(input, output, session) {
       check.names      = FALSE,
       stringsAsFactors = FALSE
     )
-
+    
     # Se imóvel filtrado, remover coluna redundante
     if (!is.null(input$imovel) && nzchar(input$imovel) && input$imovel != "all")
       df <- df[, names(df) != "Imóvel", drop = FALSE]
-
+    
     datatable(
       df,
       rownames = FALSE,
@@ -1340,8 +1340,8 @@ server <- function(input, output, session) {
         backgroundPosition = "center"
       )
   }, server = FALSE)
-
-
+  
+  
   # OUTPUT: Resultado financeiro
   # ═══════════════════════════════════════════════════════════
   output$resultado <- renderUI({
@@ -1454,10 +1454,13 @@ server <- function(input, output, session) {
   # ═══════════════════════════════════════════════════════════
   output$g_evolucao <- renderPlotly({
     df <- rec_fil() |>
-      dplyr::group_by(mes,mes_label) |>
+      dplyr::group_by(mes, mes_label) |>
       dplyr::summarise(receita=sum(receita_bruta,na.rm=TRUE),resultado=sum(resultado_liq,na.rm=TRUE),.groups="drop") |>
-      dplyr::arrange(mes) |> tail(6)
+      dplyr::arrange(as.Date(mes)) |>   # garante ordem cronológica antes do tail
+      tail(6)
     validate(need(nrow(df)>0,"Sem dados."))
+    # Ordem explícita dos labels — evita Plotly reordenar alfabeticamente
+    ordem_labels <- df$mes_label
     n <- nrow(df); cores <- c(rep("#c5d8f7",max(n-1,0)),"#1a6ef7")[1:n]
     plot_ly(df,x=~mes_label,y=~receita,type="bar",
             marker=list(color=cores,line=list(color="transparent")),name="Receita Bruta",
@@ -1467,7 +1470,8 @@ server <- function(input, output, session) {
                 name="Resultado Líq.",yaxis="y2",
                 hovertemplate="%{x}<br>Resultado: R$ %{y:,.0f}<extra></extra>") |>
       layout(paper_bgcolor="transparent",plot_bgcolor="transparent",
-             xaxis=list(showgrid=F,zeroline=F,tickfont=list(size=10),title=""),
+             xaxis=list(showgrid=F,zeroline=F,tickfont=list(size=10),title="",
+                        categoryorder="array", categoryarray=ordem_labels),
              yaxis=list(showgrid=T,gridcolor="#f0f4f8",zeroline=F,tickprefix="R$ ",tickfont=list(size=10),title=""),
              yaxis2=list(overlaying="y",side="right",showgrid=F,zeroline=F,tickprefix="R$ ",tickfont=list(size=9),title=""),
              margin=list(l=52,r=52,t=8,b=30),
@@ -1499,8 +1503,8 @@ server <- function(input, output, session) {
               rownames=FALSE,class="compact stripe hover")
   }, server=FALSE)
   
-
-
+  
+  
 } # fim server
 
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
