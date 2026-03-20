@@ -1,10 +1,9 @@
 # ============================================================
 # gdrive_public.R  —  BSBStay Shiny integração Google Drive
-# v3.2-render:
-#   - APP_CACHE_DIR aponta para /tmp/bsbstay_cache por padrão
-#     (gravável no Render mesmo no plano free)
-#   - CACHE_DIR e RAW_DIR criados imediatamente após resolução
+# v3.1 — Correções Render:
 #   - parse_date_safe em todas as datas críticas
+#   - correção de ambiguidade no mutate() de fact_manutencao
+#   - correção de ambiguidade no mutate() de fact_despesas
 #   - loops com chaves explícitas para evitar erro de parse
 # ============================================================
 
@@ -20,10 +19,8 @@ DATA_DIR <- normalizePath(
   mustWork = FALSE
 )
 
-# APP_CACHE_DIR: padrão /tmp/bsbstay_cache (gravável no Render free/starter).
-# run.R exporta Sys.setenv(APP_CACHE_DIR=...) antes de carregar este arquivo.
 CACHE_DIR <- normalizePath(
-  Sys.getenv("APP_CACHE_DIR", "/tmp/bsbstay_cache"),
+  Sys.getenv("APP_CACHE_DIR", file.path(DATA_DIR, "cache")),
   winslash = "/",
   mustWork = FALSE
 )
@@ -34,9 +31,8 @@ RAW_DIR <- normalizePath(
   mustWork = FALSE
 )
 
-# Garante que os diretórios existem antes de qualquer operação de I/O
 dir.create(CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
-dir.create(RAW_DIR,   recursive = TRUE, showWarnings = FALSE)
+dir.create(RAW_DIR, recursive = TRUE, showWarnings = FALSE)
 
 # ── Constantes ────────────────────────────────────────────────
 DRIVE_FOLDER_ID <- Sys.getenv("DRIVE_FOLDER_ID", unset = "1753AZxwmyyWYS2oYQPLeMHIz5gM8bscb")
@@ -99,6 +95,27 @@ parse_date_safe <- function(x) {
 
 normalizar_cpf_cnpj <- function(x) {
   trimws(as.character(x))
+}
+
+# ── Formatação de mês independente de locale ───────────────────
+# Usa vetores PT-BR hardcoded — funciona igual em qualquer SO/container
+.MESES_FULL <- c("janeiro","fevereiro","março","abril","maio","junho",
+                 "julho","agosto","setembro","outubro","novembro","dezembro")
+.MESES_ABBR <- c("jan","fev","mar","abr","mai","jun",
+                 "jul","ago","set","out","nov","dez")
+
+fmt_mes_pt <- function(x, abreviado = FALSE) {
+  # Aceita Date, "YYYY-MM", "YYYY-MM-DD" ou qualquer coisa que contenha YYYY-MM
+  d <- suppressWarnings(as.Date(paste0(substr(as.character(x), 1, 7), "-01")))
+  ifelse(
+    is.na(d),
+    as.character(x),
+    paste0(
+      tools::toTitleCase(if (abreviado) .MESES_ABBR[as.integer(format(d, "%m"))]
+                         else           .MESES_FULL[as.integer(format(d, "%m"))]),
+      "/", format(d, "%Y")
+    )
+  )
 }
 
 # ── URLs de download ──────────────────────────────────────────
@@ -472,7 +489,7 @@ montar_objeto_app_sqlite <- function(con) {
         cpf_cnpj      = normalizar_cpf_cnpj(cpf_cnpj),
         competencia   = as.character(competencia),
         mes           = suppressWarnings(as.Date(paste0(substr(competencia, 1, 7), "-01"))),
-        mes_label     = format(mes, "%b/%Y"),
+        mes_label     = fmt_mes_pt(mes, abreviado = TRUE),
         imovel        = as.character(nome_canonico),
         receita_bruta = dplyr::coalesce(as.numeric(receita_liquida), 0),
         taxa_adm      = dplyr::coalesce(as.numeric(tx_adm), 0),
@@ -834,7 +851,7 @@ auth_ensure_table <- function(con = NULL) {
   own <- is.null(con)
   if (own) con <- sqlite_connect()
   on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
-  
+
   if (!DBI::dbExistsTable(con, "auth_senhas")) {
     DBI::dbExecute(con, "
       CREATE TABLE auth_senhas (
@@ -862,14 +879,14 @@ auth_tem_senha <- function(cpf_cnpj, con = NULL) {
   own <- is.null(con)
   if (own) con <- sqlite_connect()
   on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
-  
+
   auth_ensure_table(con)
   cpf_norm <- trimws(as.character(cpf_cnpj))
-  
+
   res <- tryCatch(
     DBI::dbGetQuery(con,
-                    "SELECT COUNT(*) AS n FROM auth_senhas WHERE cpf_cnpj = ?",
-                    params = list(cpf_norm)),
+      "SELECT COUNT(*) AS n FROM auth_senhas WHERE cpf_cnpj = ?",
+      params = list(cpf_norm)),
     error = function(e) data.frame(n = 0)
   )
   isTRUE(res$n[1] > 0)
@@ -880,20 +897,20 @@ auth_set_senha <- function(cpf_cnpj, senha, con = NULL) {
   own <- is.null(con)
   if (own) con <- sqlite_connect()
   on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
-  
+
   auth_ensure_table(con)
   cpf_norm <- trimws(as.character(cpf_cnpj))
   hash     <- auth_hash(senha, cpf_norm)
   agora    <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  
+
   if (auth_tem_senha(cpf_norm, con)) {
     DBI::dbExecute(con,
-                   "UPDATE auth_senhas SET senha_hash = ?, alterado_em = ? WHERE cpf_cnpj = ?",
-                   params = list(hash, agora, cpf_norm))
+      "UPDATE auth_senhas SET senha_hash = ?, alterado_em = ? WHERE cpf_cnpj = ?",
+      params = list(hash, agora, cpf_norm))
   } else {
     DBI::dbExecute(con,
-                   "INSERT INTO auth_senhas (cpf_cnpj, senha_hash, criado_em, alterado_em) VALUES (?, ?, ?, ?)",
-                   params = list(cpf_norm, hash, agora, agora))
+      "INSERT INTO auth_senhas (cpf_cnpj, senha_hash, criado_em, alterado_em) VALUES (?, ?, ?, ?)",
+      params = list(cpf_norm, hash, agora, agora))
   }
   invisible(TRUE)
 }
@@ -903,14 +920,14 @@ auth_check_senha <- function(cpf_cnpj, senha, con = NULL) {
   own <- is.null(con)
   if (own) con <- sqlite_connect()
   on.exit(if (own) DBI::dbDisconnect(con), add = TRUE)
-  
+
   auth_ensure_table(con)
   cpf_norm <- trimws(as.character(cpf_cnpj))
-  
+
   res <- tryCatch(
     DBI::dbGetQuery(con,
-                    "SELECT senha_hash FROM auth_senhas WHERE cpf_cnpj = ?",
-                    params = list(cpf_norm)),
+      "SELECT senha_hash FROM auth_senhas WHERE cpf_cnpj = ?",
+      params = list(cpf_norm)),
     error = function(e) data.frame(senha_hash = character(0))
   )
   if (nrow(res) == 0) return(FALSE)
