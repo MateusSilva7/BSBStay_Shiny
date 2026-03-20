@@ -1,10 +1,26 @@
 # ============================================================
-# app_public.R — Extrato do Proprietário autenticado por sessão
-# v3.1-render: adaptado para Render.com / Docker
+# BSB.STAY — Extrato do Proprietário
+# app.R — v3.0: Análise Completa de Despesas, Custos,
+#               Ordens de Serviço e Diária entre Check-ins
 #
-# ATENÇÃO: options(shiny.host/port) e source(gdrive_public.R)
-# são feitos EXCLUSIVAMENTE em run.R. Este arquivo é um módulo
-# filho carregado via sys.source() pelo app.R roteador.
+# Novidades v3.0 (sobre v2.0):
+#   - Seção "Operacional": Despesas | Custos por Apt. | OS
+#   - Seção "Análise da Diária": valor entre check-ins + KPIs
+#   - Todas as seções seguem os filtros de mês e imóvel
+# ============================================================
+
+# ── Bootstrap Render/Docker ───────────────────────────────────
+options(
+  shiny.host = "0.0.0.0",
+  shiny.port = as.integer(Sys.getenv("PORT", "3838"))
+)
+
+APP_ROOT <- normalizePath(Sys.getenv("APP_ROOT", "."), winslash = "/", mustWork = FALSE)
+dir.create(file.path(APP_ROOT, "data", "cache"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(APP_ROOT, "data", "raw"), recursive = TRUE, showWarnings = FALSE)
+
+# ============================================================
+# app_public.R — Extrato do Proprietário autenticado por sessão
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -19,25 +35,21 @@ suppressPackageStartupMessages({
 
 APP_ROOT <- normalizePath(Sys.getenv("APP_ROOT", "."), winslash = "/", mustWork = FALSE)
 
-# gdrive_public.R já foi carregado por run.R; só faz source se
-# este módulo for rodado de forma standalone (ex: testes locais).
-if (!exists("carregar_dados_app", inherits = TRUE)) {
+if (!exists("carregar_dados_app")) {
   source(file.path(APP_ROOT, "R", "gdrive_public.R"), local = FALSE)
 }
 
-# APP_DATA_GLOBAL é pré-aquecido por run.R (boot-time).
-# Se não existir (standalone), carrega agora com forcar_dl=FALSE.
-if (!exists("APP_DATA_GLOBAL", inherits = TRUE)) {
-  APP_DATA_GLOBAL <<- tryCatch(
-    carregar_dados_app(
-      file_id    = DRIVE_FILE_ID,
-      folder_id  = DRIVE_FOLDER_ID,
-      forcar_dl  = FALSE,
-      forcar_etl = FALSE
-    ),
-    error = function(e) structure(list(), erro_msg = e$message)
-  )
-}
+APP_DATA <- tryCatch(
+  carregar_dados_app(
+    file_id = DRIVE_FILE_ID,
+    folder_id = DRIVE_FOLDER_ID,
+    forcar_dl = TRUE,
+    forcar_etl = TRUE
+  ),
+  error = function(e) {
+    structure(list(), erro_msg = e$message)
+  }
+)
 
 `%||%` <- function(x, y) {
   if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
@@ -45,25 +57,7 @@ if (!exists("APP_DATA_GLOBAL", inherits = TRUE)) {
 
 TOKEN_TODOS <- "__todos__"
 
-MESES_PT_FULL <- c(
-  "janeiro", "fevereiro", "março", "abril", "maio", "junho",
-  "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"
-)
-
-MESES_PT_ABBR <- c(
-  "jan", "fev", "mar", "abr", "mai", "jun",
-  "jul", "ago", "set", "out", "nov", "dez"
-)
-
-fmt_mes_pt <- function(x, abreviado = FALSE) {
-  x <- as.character(x)
-  d <- suppressWarnings(as.Date(paste0(substr(x, 1, 7), "-01")))
-  if (all(is.na(d))) return(x)
-  mes <- as.integer(format(d, "%m"))
-  ano <- format(d, "%Y")
-  lab <- if (abreviado) MESES_PT_ABBR[mes] else MESES_PT_FULL[mes]
-  paste0(tools::toTitleCase(lab), "/", ano)
-}
+# fmt_mes_pt, MESES_PT_FULL/ABBR definidos em R/gdrive_public.R
 
 fmt_currency <- function(x) {
   v <- suppressWarnings(as.numeric(x))
@@ -350,11 +344,17 @@ label{font-size:11px!important;font-weight:700!important;color:#6b7280!important
 # ═══════════════════════════════════════════════════════════════
 
 server <- function(input, output, session) {
-  
-  # APP_DATA_GLOBAL foi carregado uma vez em run.R (boot-time).
-  # Cada sessão começa com o mesmo snapshot — atualizado pelo botão Sync.
+
   rv <- reactiveValues(
-    app_data    = APP_DATA_GLOBAL,
+    app_data    = tryCatch(
+      carregar_dados_app(
+        file_id    = DRIVE_FILE_ID,
+        folder_id  = DRIVE_FOLDER_ID,
+        forcar_dl  = FALSE,
+        forcar_etl = FALSE
+      ),
+      error = function(e) structure(list(), erro_msg = e$message)
+    ),
     syncing     = FALSE,
     sync_status = "ok",
     last_sync   = {
@@ -363,7 +363,7 @@ server <- function(input, output, session) {
     },
     op_aba = "despesas"
   )
-  
+
   observeEvent(input$btn_aba_op, { rv$op_aba <- input$btn_aba_op }, ignoreInit = TRUE)
   
   # ── Reactives base ──────────────────────────────────────────
@@ -451,7 +451,7 @@ server <- function(input, output, session) {
   })
   
   # ── Sync ──────────────────────────────────────────────────────
-  
+
   # ── Sync ──────────────────────────────────────────────────────
   output$sync_bar <- renderUI({
     dot_class <- paste("sync-dot", rv$sync_status)
@@ -463,21 +463,13 @@ server <- function(input, output, session) {
                     onclick = "Shiny.setInputValue(\'btn_sync\', Math.random())",
                     if (rv$syncing) "\u23f3 Aguarde..." else "\u21bb Atualizar dados"))
   })
-  
+
   observeEvent(input$btn_sync, {
     rv$syncing <- TRUE
     tryCatch({
-      nd <- carregar_dados_app(
-        file_id    = DRIVE_FILE_ID,
-        folder_id  = DRIVE_FOLDER_ID,
-        forcar_dl  = TRUE,
-        forcar_etl = TRUE
-      )
-      rv$app_data    <- nd
-      rv$last_sync   <- format(Sys.time(), "%d/%m/%Y %H:%M")
+      nd <- carregar_dados_app(folder_id = DRIVE_FOLDER_ID, forcar_dl = TRUE, forcar_etl = TRUE)
+      rv$app_data  <- nd; rv$last_sync <- format(Sys.time(), "%d/%m/%Y %H:%M")
       rv$sync_status <- "ok"
-      # Atualiza o cache global para que novas sessões também se beneficiem
-      APP_DATA_GLOBAL <<- nd
       showNotification("✓ Dados atualizados!", type = "message", duration = 4)
     }, error = function(e) {
       rv$sync_status <- "err"
@@ -487,7 +479,7 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
   
   # ── Header prop ───────────────────────────────────────────────
-  
+
   # ── Header ────────────────────────────────────────────────────
   output$hdr_prop <- renderUI({
     d <- dados(); req(d)
@@ -504,14 +496,14 @@ server <- function(input, output, session) {
           "🔑 Alterar Senha")
     )
   })
-  
+
   # ── Filter bar ────────────────────────────────────────────────
   output$filter_bar <- renderUI({
     d <- dados(); req(d, length(meses_disponiveis()) > 0)
     meses <- meses_disponiveis()
     meses_lbl <- setNames(meses, {
       datas <- suppressWarnings(as.Date(paste0(meses, "-01")))
-      ifelse(is.na(datas), meses, format(datas, "%B/%Y"))
+      ifelse(is.na(datas), meses, fmt_mes_pt(datas))
     })
     imoveis <- c("Todos os im\u00f3veis" = "all", setNames(d$imoveis_ids, d$imoveis_ids))
     div(class = "fbar",
@@ -520,12 +512,12 @@ server <- function(input, output, session) {
         div(class = "fbar-lbl", "IM\u00d3VEL:"),
         selectInput("imovel",  NULL, choices = imoveis,   selected = "all",    width = "260px"))
   })
-  
+
   output$alerta_erro <- renderUI({
     msg <- attr(rv$app_data, "erro_msg")
     if (!is.null(msg)) div(class = "erro-dados", tags$b("\u26a0 Aten\u00e7\u00e3o: "), msg)
   })
-  
+
   output$body <- renderUI({
     d <- dados()
     if (is.null(d)) {
@@ -537,11 +529,11 @@ server <- function(input, output, session) {
     m <- isolate(rm())
     mes_label_sel <- {
       dt <- suppressWarnings(as.Date(paste0(input$mes_sel, "-01")))
-      if (!is.na(dt)) format(dt, "%B/%Y") else input$mes_sel
+      if (!is.na(dt)) fmt_mes_pt(dt) else input$mes_sel
     }
     mes_badge_sm <- {
       dt <- suppressWarnings(as.Date(paste0(input$mes_sel, "-01")))
-      if (!is.na(dt)) format(dt, "%b %Y") else input$mes_sel
+      if (!is.na(dt)) fmt_mes_pt(dt, abreviado = TRUE) else input$mes_sel
     }
     
     tagList(
@@ -689,7 +681,7 @@ server <- function(input, output, session) {
           ),
           div(class = "card",
               div(class = "card-hdr",
-                  div(class = "card-ttl", "Evolução 12 Meses"),
+                  div(class = "card-ttl", "Evolução 6 Meses"),
                   span(class = "badge", "Receita + Resultado")),
               shinycssloaders::withSpinner(plotlyOutput("g_evolucao", height = "200px"), type = 4, color = "#00c49a")
           )
@@ -783,7 +775,7 @@ server <- function(input, output, session) {
     if (nrow(cal_fil) == 0) return(NULL)
     mes_label_sel <- {
       dt <- suppressWarnings(as.Date(paste0(input$mes_sel, "-01")))
-      if (!is.na(dt)) format(dt, "%B/%Y") else input$mes_sel
+      if (!is.na(dt)) fmt_mes_pt(dt) else input$mes_sel
     }
     tagList(
       div(class = "sec", "ANÁLISE DE RECEITA"),
@@ -812,7 +804,7 @@ server <- function(input, output, session) {
     if (nrow(cal_fil) == 0) return(NULL)
     mes_badge_sm <- {
       dt <- suppressWarnings(as.Date(paste0(input$mes_sel, "-01")))
-      if (!is.na(dt)) format(dt, "%b %Y") else input$mes_sel
+      if (!is.na(dt)) fmt_mes_pt(dt, abreviado = TRUE) else input$mes_sel
     }
     tagList(
       div(class = "sec", "DETALHAMENTO DO MÊS"),
@@ -1026,7 +1018,7 @@ server <- function(input, output, session) {
       )
     }
   })
-  
+
   
   # ── KPIs Despesas ────────────────────────────────────────────
   output$kpis_despesas <- renderUI({
@@ -1265,12 +1257,12 @@ server <- function(input, output, session) {
   output$kpis_reposicao <- renderUI({
     rep <- reposicao_fil()
     if (nrow(rep) == 0) return(p(class = "sem-dados", "Sem itens de reposição para o período."))
-    
+
     total_val  <- sum(suppressWarnings(as.numeric(rep$valor_unitario_ou_total)), na.rm = TRUE)
     total_qtd  <- sum(suppressWarnings(as.numeric(rep$quantidade)), na.rm = TRUE)
     n_itens    <- nrow(rep)
     n_aptos    <- if ("apto_original" %in% names(rep)) length(unique(rep$apto_original)) else
-      if ("imovel_nome"   %in% names(rep)) length(unique(rep$imovel_nome))   else "—"
+                  if ("imovel_nome"   %in% names(rep)) length(unique(rep$imovel_nome))   else "—"
     item_freq  <- if ("item_limpo" %in% names(rep)) {
       tc <- sort(table(rep$item_limpo), decreasing = TRUE)
       if (length(tc) > 0) names(tc)[1] else "—"
@@ -1279,7 +1271,7 @@ server <- function(input, output, session) {
       if (length(tc) > 0) names(tc)[1] else "—"
     } else "—"
     ticket_med <- if (n_itens > 0) total_val / n_itens else 0
-    
+
     div(class = "kgrid-sm",
         kcard_sm("Total Reposição",   brl(total_val),               "teal"),
         kcard_sm("Qtd. Total",        as.character(round(total_qtd)), "blue"),
@@ -1288,29 +1280,29 @@ server <- function(input, output, session) {
         kcard_sm("Item Mais Reposto", item_freq,                    "red"),
         kcard_sm("Ticket Médio/Item", brl(ticket_med),              "teal"))
   })
-  
+
   # ── Tabela Reposição ──────────────────────────────────────────
   output$t_reposicao <- renderDT({
     rep <- reposicao_fil()
     validate(need(nrow(rep) > 0, "Sem itens de reposição para o período/imóvel selecionado."))
-    
+
     # Resolver coluna de imóvel
     apto_col <- if ("apto_original" %in% names(rep)) rep$apto_original
-    else if ("imovel_nome" %in% names(rep)) rep$imovel_nome
-    else if ("property_id" %in% names(rep)) rep$property_id
-    else rep("—", nrow(rep))
-    
+                else if ("imovel_nome" %in% names(rep)) rep$imovel_nome
+                else if ("property_id" %in% names(rep)) rep$property_id
+                else rep("—", nrow(rep))
+
     # Resolver coluna de item
     item_col <- if ("item_limpo" %in% names(rep)) rep$item_limpo
-    else if ("item_raw" %in% names(rep)) rep$item_raw
-    else rep("—", nrow(rep))
-    
+                else if ("item_raw" %in% names(rep)) rep$item_raw
+                else rep("—", nrow(rep))
+
     # Quantidade e valores
     qtd_col   <- suppressWarnings(as.numeric(if ("quantidade" %in% names(rep)) rep$quantidade else NA))
     val_col   <- suppressWarnings(as.numeric(rep$valor_unitario_ou_total))
     val_total <- ifelse(is.na(qtd_col) | qtd_col <= 0, val_col, qtd_col * val_col)
     max_val   <- max(val_total, na.rm = TRUE)
-    
+
     df <- data.frame(
       `Imóvel`      = as.character(apto_col),
       `Item`        = as.character(item_col),
@@ -1320,11 +1312,11 @@ server <- function(input, output, session) {
       check.names      = FALSE,
       stringsAsFactors = FALSE
     )
-    
+
     # Se imóvel filtrado, remover coluna redundante
     if (!is.null(input$imovel) && nzchar(input$imovel) && input$imovel != "all")
       df <- df[, names(df) != "Imóvel", drop = FALSE]
-    
+
     datatable(
       df,
       rownames = FALSE,
@@ -1348,8 +1340,8 @@ server <- function(input, output, session) {
         backgroundPosition = "center"
       )
   }, server = FALSE)
-  
-  
+
+
   # OUTPUT: Resultado financeiro
   # ═══════════════════════════════════════════════════════════
   output$resultado <- renderUI({
@@ -1507,12 +1499,10 @@ server <- function(input, output, session) {
               rownames=FALSE,class="compact stripe hover")
   }, server=FALSE)
   
-  
-  
+
+
 } # fim server
 
-# app_public.R pode ser rodado de forma standalone (dev local) ou
-# carregado como módulo filho por app.R (produção).
-# Em produção, app.R acessa e$ui e chama e$server() manualmente.
-# A linha abaixo garante compatibilidade com ambos os modos.
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) y else x
+
 app <- shinyApp(ui, server)
